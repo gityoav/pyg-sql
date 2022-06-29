@@ -183,6 +183,7 @@ If we set doc = True, the table will be viewed internally as a no-sql-like docum
     
     :Example: document store containing pd.DataFrames.
     ----------
+    
     >>> from pyg import *
     >>> doc = dict(name = 'yoav', surname = 'git', age = 35, 
                    salary = pd.Series([100,200,300], drange(2)),

@@ -1,6 +1,6 @@
 import sqlalchemy as sa
 from sqlalchemy_utils.functions import create_database
-from pyg_base import cache, cfg_read, named_dict, dumps, as_list, dictattr, dictable, Dict, decode, is_dict, is_dictable, is_strs, is_str, is_int, ulist, encode, passthru
+from pyg_base import cache, cfg_read, named_dict, dumps, loads, as_list, dictattr, dictable, Dict, decode, is_dict, is_dictable, is_strs, is_str, is_int, ulist, encode, passthru, try_back, unique
 from pyg_encoders import as_reader, as_writer
 from sqlalchemy import Table, Column, Integer, String, MetaData, Identity, Float, DATE, DATETIME, TIME, select, func, not_, and_, or_, desc, asc
 from sqlalchemy.orm import Session
@@ -264,7 +264,6 @@ class sql_table(object):
     >>> t = t.insert(name = 'yoav', surname = 'git', age = 48)
     >>> assert len(t) == 3
     
-
     >>> t = t.delete() 
     >>> t = get_sql_table(db = 'test', table = 'students', non_null = ['name', 'surname'], 
                           _id = dict(_id = int, created = datetime.datetime), 
@@ -280,7 +279,7 @@ class sql_table(object):
 
     Where did the data go to? We automatically archive the deleted old records for dict(name = 'yoav', surname = 'git') here:
 
-    >>> t.deleted ## 
+    >>> t.deleted 
     
     t.deleted is a table by same name
     - exists on deleted_test database, 
@@ -292,18 +291,53 @@ class sql_table(object):
     :Example: doc management
     ------------------------
     We now suppose that we are not sure what records we want to keep for each student
-    
-    >>> self = get_sql_table(db = 'test', table = 'unstructured_students', non_null = ['name', 'surname'], 
+
+    >>> from pyg import *
+    >>> import datetime
+    >>> t = get_sql_table(db = 'test', table = 'unstructured_students', non_null = ['name', 'surname'], 
                           _id = dict(_id = int, created = datetime.datetime), 
                           nullable =  dict(doc = str, details = str, dob = datetime.date, age = int, grade = float), 
                           pk = ['name', 'surname'],
                           doc = True)   ##<---- The table will actually be a document store
 
+    We are now able to keep varied structure per each record. We are only able to filter against the columns specified above
+
+    >>> t = t.delete()
     
     >>> doc = dict(name = 'yoav', surname = 'git', age = 30, profession = 'coder', children = ['ayala', 'opher', 'itamar'])
-    >>> self.insert(**doc)
-    >>> self.update_one(doc)
+    >>> inserted_doc = t.insert_one(doc)
+    >>> assert t.inc(name = 'yoav', surname = 'git')[0].children == ['ayala', 'opher', 'itamar']
+
+    >>> doc2 = dict(name = 'anna', surname = 'git', age = 28, employer = 'Cambridge University', hobbies = ['chess', 'music', 'swimming'])
+    >>> _ = t.insert_one(doc2)
+    >>> assert t[dict(age = 28)].hobbies == ['chess', 'music', 'swimming']  # Note that we can filter or search easily using the column 'age' that was specified in table. We cannot do this on 'employer'
+
+    : Example: document store containing pd.DataFrames.
+    ----------
+    >>> from pyg import *
+    >>> doc = dict(name = 'yoav', surname = 'git', age = 35, 
+                   salary = pd.Series([100,200,300], drange(2)),
+                   costs = pd.DataFrame(dict(transport = [0,1,2], food = [4,5,6], education = [10,20,30]), drange(2)))
     
+    >>> t = get_sql_table(db = 'test', table = 'unstructured_students', non_null = ['name', 'surname'], 
+                          _id = dict(_id = int, created = datetime.datetime), 
+                          nullable =  dict(doc = str, details = str, dob = datetime.date, age = int, grade = float), 
+                          pk = ['name', 'surname'],
+                          writer = 'c:/temp/%name/%surname.parquet', ##<---- The location where pd.DataFrame/Series are to be stored
+                          doc = True)   
+
+    >>> inserted = t.insert_one(doc)
+    >>> import os
+    >>> assert 'costs.parquet' in os.listdir('c:/temp/yoav/git') and ('salary.parquet' in os.listdir('c:/temp/yoav/git'))
+    
+    We can now access the data seemlessly:
+
+    >>> read_from_db = t.inc(name = 'yoav')[0]     
+    >>> read_from_file = pd_read_parquet('c:/temp/yoav/git/salary.parquet')
+    >>> assert list(read_from_db.salary.values) == [100, 200, 300]
+    >>> assert list(read_from_file.values) == [100, 200, 300]
+    
+
     """
     def __init__(self, table, db = None, engine = None, server = None, spec = None, selection = None, order = None, reader = None, writer = None, pk = None, doc = None, **_):
         """
@@ -323,11 +357,13 @@ class sql_table(object):
             The columns in "select"
         order : dict or list, optional
             The columns in ORDER BY. The default is None.
-
-        Returns
-        -------
-        None.
-
+        reader :
+            This is only relevant to document store            
+        writer : callable/str/bool
+            This is only relevant to document store and specifies how documents that contain complicated objects are transformed. e.g. Use writer = 'c:/%key1/%key2.parquet' to specify documents saved to parquet based on document keys        
+        doc: bool
+            Specifies if to create the table as a document store
+            
         """
         if is_str(table):
             table = get_sql_table(table = table, db = db, server = server)
@@ -362,10 +398,16 @@ class sql_table(object):
     
     @property
     def schema(self):
+        """
+        table schema
+        """
         return self.table.schema        
     
     @property
     def _ids(self):
+        """
+        columns generated by the SQL Server and should not be provided by the user
+        """
         return [c.name for c in self.table.columns if c.server_default is not None]
     
     def _and(self, doc, keys):
@@ -376,7 +418,9 @@ class sql_table(object):
             return sa.and_(*[self.table.c[i] == doc[i] for i in keys])
 
     def _id(self, doc):
-        ### create a filter based on doc
+        """
+        creates a partial filter based on the document keys
+        """
         pks = {i: doc[i] for i in self._pk if i in doc}
         if len(pks):
             return pks
@@ -390,15 +434,29 @@ class sql_table(object):
 
     @property
     def nullables(self):
+        """
+        columns that are nullable
+        """
         return [c.name for c in self.tbl.columns if c.nullable]
     
     @property
     def non_null(self):        
+        """
+        columns that must not be Null
+        """
         ids = self._ids
         return sorted([c.name for c in self.tbl.columns if c.nullable is False and c.name not in ids])
         
     
     def _c(self, expression):
+        """
+        converts an expression to a sqlalchemy filtering expression
+        
+        :Example:
+        ---------
+        >>> expression = dict(a = 1, b = 2)
+        >>> assert t._c(expression) == sa.and_(t.c.a == 1, t.c.b == 2)
+        """
         if isinstance(expression, dict):
             t = self.table.c    
             return sa.and_(*[sa.or_(*[t[k] == i for i in v]) if isinstance(v, list) else t[k] == self._c(v) for k,v in expression.items()]) 
@@ -412,6 +470,14 @@ class sql_table(object):
         return self.table.c
     
     def __ge__(self, kwargs):
+        """
+        provides a quick filtering by overloading operator:
+        
+        :Example:
+        ---------
+        >>> assert t >= dict(age = 30) == t.c.age >= 30
+        >>> assert t > dict(weight = 30, height = 20) == sa.and_(t.c.weight >= 30, t.c.height > 20)
+        """
         if not isinstance(kwargs, dict) and len(self._ids) == 1:
             kwargs = {self._ids : kwargs}
         c = self.table.c
@@ -437,11 +503,31 @@ class sql_table(object):
             
     @property
     def _pk(self):
+        """
+        list of primary keys
+        """
         return ulist(sorted(set(as_list(self.pk))))
 
     def find(self, *args, **kwargs):
         """
-        This returns a table with additional filtering 
+        This returns a table with additional filtering. note that you can build it iteratively
+        
+        :Parameters:
+        ------------
+        args: list of sa.Expression
+            filter based on sqlalchemy tech
+        
+        kwargs: dict
+            simple equality filters
+        
+        :Example:
+        ---------
+        >>> t.where(t.c.name == 'yoav')
+        >>> t.find(name = 'yoav')
+        
+        :Example: building query in stages...
+        ---------
+        >>> t.inc(name = 'yoav').exc(t.c.age > 30) ## all the yoavs aged 30 or less        
         """
         res = self.copy()
         if len(args) == 0 and len(kwargs) == 0:
@@ -463,6 +549,14 @@ class sql_table(object):
     where = find
     
     def __sub__(self, other):
+        """
+        remove a column from the selection (select *WHAT* from table)
+
+        :Parameters:
+        ----------
+        other : str/list of str
+            names of columns excluded in SELECT statement
+        """
         if self.selection is None:
             return self.select(self.columns - other)
         elif is_strs(self.selection):
@@ -472,68 +566,24 @@ class sql_table(object):
                 
     def exc(self, *args, **kwargs):
         """
-        This returns a table with additional filtering in q
+        Exclude: This returns a table with additional filtering OPPOSITE TO inc. note that you can build it iteratively
+        
+        :Parameters:
+        ------------
+        args: list of sa.Expression
+            filter based on sqlalchemy tech
+        
+        kwargs: dict
+            simple equality filters
         
         :Example:
         ---------
-        >>> from pyg import * 
-        >>> import datetime
-        >>> self = get_sql_table(db = 'test', table = 'students', _id = dict(_id = int, created = datetime.datetime), 
-                                 non_null = ['name', 'surname'], 
-                                 nullable =  dict(doc = str, details = str, dob = datetime.date, age = int, grade = float))
-        >>> self.delete()
-        >>> assert len(self) == 0         
-        >>> self = self.insert(name = 'yoav', surname = 'git')
-        >>> self = self.insert(name = 'anna', surname = 'git')
-        >>> assert len(self) == 2
-        >>> self = self.insert(name = ['opher', 'ayala', 'itamar'], surname = 'gate')
-        >>> self[::]        
-
-        dictable[5 x 7]
-        _id|created                   |name  |surname|dob |age |grade
-        15 |2022-06-25 23:41:55.387000|yoav  |git    |None|None|None 
-        16 |2022-06-25 23:41:55.390000|anna  |git    |None|None|None 
-        17 |2022-06-25 23:41:55.390000|opher |gate   |None|None|None 
-        18 |2022-06-25 23:41:55.390000|ayala |gate   |None|None|None 
-        19 |2022-06-25 23:41:55.390000|itamar|gate   |None|None|None 
-
-
-        >>> self.insert(doc = dict(name = 'josh', surname = 'cohen'))
-        type(self[5]['doc'])
+        >>> t.where(t.c.name != 'yoav')
+        >>> t.exc(name = 'yoav') 
         
-        
-        from pyg import *
-        from pyg_mongo._db_cell import _load_asof
-        import datetime
-
-        db = partial(get_sql_table, db = 'test', table = 'students', 
-                     _id = dict(_id = int, created = datetime.datetime), 
-                     non_null = ['name', 'surname'], 
-                     nullable =  dict(doc = str, details = str, dob = datetime.date, age = int, grade = float), 
-                     pk = ['name', 'surname'], doc = True)        
-        table = db()        
-        kwargs = dict(name = 'itamar', surname = 'date')
-        deleted = False
-        qq = None
-        doc = _load_asof(table, kwargs, deleted, qq)
-        doc = doc.save()
-        self = db()
-        get_sql_table('students', 'test').delete()
-        
-        doc1 = db_cell(add_, a = 2, b = 4, name = 'itamar', surname = 'date', db = db).load().go()
-        doc2 = db_cell(add_, a = 3, b = 4, name = 'itamar', surname = 'date', db = db).load().go()
-
-        self
-        doc = doc1
-        self.update_one(doc)
-
-        assert len(db()) == 1        
-        doc1._id
-        doc2._id        
-        
-        assert db()[0].data == 
-        db().docs()
-        doc2.save()
+        :Example: building query in stages...
+        ---------
+        >>> t.inc(name = 'yoav').exc(t.c.age > 30) ## all the yoavs aged 30 or less        
         """
         if len(args) == 0 and len(kwargs) == 0:
             return self
@@ -658,10 +708,21 @@ class sql_table(object):
         return res
                 
     def insert_one(self, doc, ignore_bad_keys = False):
+        """
+        insert a single document to the table
+
+        Parameters
+        ----------
+        doc : dict
+            record.
+        ignore_bad_keys : 
+            Suppose you have a document with EXTRA keys. Rather than filter the document, set ignore_bad_keys = True and we will drop irrelevant keys for you
+
+        """
         edoc = self._dock(doc)
         columns = self.columns
         if not ignore_bad_keys:
-            bad_keys = {key: value for key, value in doc.items() if key not in columns}
+            bad_keys = {key: value for key, value in edoc.items() if key not in columns}
             if len(bad_keys) > 0:
                 raise ValueError('cannot insert into db a document with these keys: %s. The table only has these keys: %s'%(bad_keys, columns))        
         res = self._write_doc(edoc, columns = columns)
@@ -721,6 +782,9 @@ class sql_table(object):
 
     
     def update_one(self, doc, upsert = True):
+        """
+        Similar to insert, except will throw an error if upsert = False and an existing document is not there
+        """
         edoc = self._dock(doc)
         existing = self.inc().inc(**self._id(edoc))
         n = len(existing)
@@ -742,6 +806,13 @@ class sql_table(object):
                 
             
     def insert_many(self, docs):
+        """
+        insert multiple docs. 
+
+        Parameters
+        ----------
+        docs : list of dicts, dictable, pd.DataFrame
+        """
         rs = dictable(docs)
         if len(rs) > 0:
             if self._pk :
@@ -755,6 +826,10 @@ class sql_table(object):
         return self
     
     def __add__(self, item):
+        """
+        if item is dict, equivalent to insert_one(item)
+        if item is dictable/pd.DataFrame, equivalent to insert_many(item)
+        """
         if is_dict(item) and not is_dictable(item):
             self.insert_one(item)
         else:
@@ -765,10 +840,33 @@ class sql_table(object):
     def insert(self, data = None, columns = None, **kwargs):
         """
         This allows an insert of either a single row or multiple rows, from anything like 
+
+        :Example:
+        ----------
         >>> self.insert(name = ['father', 'mother', 'childa'], surname = 'common_surname') 
         >>> self.insert(pd.DataFrame(dict(name = ['father', 'mother', 'childa'], surname = 'common_surname')))
+        
+        
+        Since we also support doc management, there is a possibility one is trying to enter a single document of shape dict(name = ['father', 'mother', 'childa'], surname = 'common_surname')
+        We force the user to use either insert_one or insert_many in these cases.
+        
         """
         rs = dictable(data = data, columns = columns, **kwargs) ## this allows us to insert multiple rows easily as well as pd.DataFrame
+        if len(rs)>1:
+            pk = self._pk
+            if pk:
+                u = rs.listby(self._pk)
+                u = dictable([row for row in u if len((row - pk).values()[0])>1])
+                if len(u):
+                    u = u.do(try_back(unique))                
+                    u0 = u[0].do(try_back(unique))
+                    u0 = {k:v for k,v in u0.items() if k in self._pk or isinstance(v, list)}
+                    raise ValueError('When trying to convert data into records, we detected multiple rows with same unique %s, e.g. \n\n%s\n\nCan you please use .insert_many() or .insert_one() to resolve this explicitly'%(self._pk, u0))
+            elif self.doc:
+                if isinstance(data, list) and len(data) < len(rs):
+                    raise ValueError('Original value contained %s rows while new data has %s.\n We are unsure if you are trying to enter documents with list in them.\nCan you please use .insert_many() or .insert_one() to resolve this explicitly'%(len(data), len(rs)))
+                elif isinstance(data, dict) and not isinstance(data, dictable):
+                    raise ValueError('Original value provided as a dict while now we have %s multiple rows.\nWe think you may be trying to enter a single document with lists in it.\nCan you please use .insert_many() or .insert_one() to resolve this explicitly'%len(rs))
         return self.insert_many(rs)
 
     def find_one(self, doc = None, *args, **kwargs):
@@ -799,7 +897,7 @@ class sql_table(object):
         if isinstance(doc, (list, tuple)):
             return type(doc)([self._read(d, reader) for d in res])
         elif is_str(doc) and doc.startswith('{'):
-            res = json.loads(res)
+            res = loads(res)
             for r in as_list(reader):
                 res = res[r] if is_strs(r) else r(res)
         return res
@@ -879,6 +977,11 @@ class sql_table(object):
     set = update
 
     def full_delete(self):
+        """
+        A standard delete will actually auto-archive a table with primary keys. # i.e. we have full audit
+        .full_delete() will drop the currently selected records without archiving them first
+        
+        """
         statement = self.table.delete()
         if self.spec is not None:
             statement = statement.where(self.spec)
@@ -906,9 +1009,15 @@ class sql_table(object):
         
     @property
     def name(self):
+        """
+        table name
+        """
         return self.table.name
     
     def distinct(self, *keys):
+        """
+        select DISTINCT *keys FROM TABLE
+        """
         if len(keys) == 0 and self.selection is not None:
             keys = as_list(self.selection)
         session = Session(self.engine)
@@ -936,6 +1045,8 @@ class sql_table(object):
             res = get_sql_table(table = self.table, db = db_name, non_null = dict(deleted = datetime.datetime), server = self.server)
             res.spec = self.spec
             res.order = self.order
+            res.selection = self.selection
+            res.doc = self.doc
             res.pk = None
             return res
                 
@@ -945,7 +1056,7 @@ class sql_table(object):
         :Returns:
         ---------
         tuple
-            A unique combination of the client addres, db name and collection name, identifying the collection uniquely.
+            A unique combination of the server address, db name and table name, identifying the table uniquely. This allows us to create an in-memory representation of the data in pyg-cell
 
         """
         return ('server', self.server or _server()), ('db', self.db), ('table', self.table.name)

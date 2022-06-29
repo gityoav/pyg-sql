@@ -150,15 +150,15 @@ This ensure a full audit and roll-back of records is possible.
 
 ## sql_table as a document store
 
-If we set doc = True, the table will be viewed internally as a no-sql-like document store. 
+    If we set doc = True, the table will be viewed internally as a no-sql-like document store. 
 
-- the nullable columns supplied are the columns on which querying will be possible
-- the primary keys are still used to ensure we have one document per unique pk
-- the document is jsonified (handling non-json stuff like dates, np.array and pd.DataFrames) and put into the 'doc' column in the table, but this is invisible to the user.
-
+    - the nullable columns supplied are the columns on which querying will be possible
+    - the primary keys are still used to ensure we have one document per unique pk
+    - the document is jsonified (handling non-json stuff like dates, np.array and pd.DataFrames) and put into the 'doc' column in the table, but this is invisible to the user.
 
     :Example: doc management
     ------------------------
+    
     We now suppose that we are not sure what records we want to keep for each student
 
     >>> from pyg import *

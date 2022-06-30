@@ -52,7 +52,9 @@ This allows us to
     >>> assert t['surname'] == ['gate', 'git']
     >>> assert t[dict(name = 'yoav')] == t.inc(name = 'yoav')[0]
 
-
+    >>> names = [doc.name for doc in t.sort(dict(age=-1))]
+    >>> assert names == ['yoav', 'anna', 'ayala', 'opher', 'itamar']
+    
     :Example: simple filtering
     --------------------------
     >>> assert len(t.inc(surname = 'gate')) == 3
@@ -64,7 +66,6 @@ This allows us to
     >>> assert len(t <= dict(age = 37)) == 4
     >>> assert len(t.inc(t.c.age > 30)) == 2  # can filter using the standard sql-alchemy .c.column objects
     >>> assert len(t.where(t.c.age > 30)) == 2  # can filter using the standard sql-alchemy "where" statement 
-
 
 ## insertion of "documents" into string columns...
 
@@ -117,6 +118,7 @@ This ensure a full audit and roll-back of records is possible.
     ------------------------------------------
     The table as set up can have multiple items so:
     
+    >>> from pyg import * 
     >>> t = t.delete()
     >>> t = t.insert(name = 'yoav', surname = 'git', age = 46)
     >>> t = t.insert(name = 'yoav', surname = 'git', age = 47)
@@ -187,7 +189,8 @@ This ensure a full audit and roll-back of records is possible.
     >>> from pyg import *
     >>> doc = dict(name = 'yoav', surname = 'git', age = 35, 
                    salary = pd.Series([100,200,300], drange(2)),
-                   costs = pd.DataFrame(dict(transport = [0,1,2], food = [4,5,6], education = [10,20,30]), drange(2)))
+                   costs = dict(fixed_cost     = 100, 
+                                variable_costs = pd.DataFrame(dict(transport = [0,1,2], food = [4,5,6], education = [10,20,30]), drange(2))))  # pandas object is in doc.costs.variable_costs
     
     >>> t = sql_table(db = 'test', table = 'unstructured_students', non_null = ['name', 'surname'], 
                           _id = dict(_id = int, created = datetime.datetime), 
@@ -198,7 +201,8 @@ This ensure a full audit and roll-back of records is possible.
 
     >>> inserted = t.insert_one(doc)
     >>> import os
-    >>> assert 'costs.parquet' in os.listdir('c:/temp/yoav/git') and ('salary.parquet' in os.listdir('c:/temp/yoav/git'))
+    >>> assert 'salary.parquet' in os.listdir('c:/temp/yoav/git')
+    >>> assert 'variable_costs.parquet' in os.listdir('c:/temp/yoav/git/costs') ## yes, dicts of dicts, or dicts of lists are all fine...
     
     We can now access the data seemlessly:
 

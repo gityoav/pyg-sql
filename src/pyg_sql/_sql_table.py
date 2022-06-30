@@ -1,6 +1,6 @@
 import sqlalchemy as sa
 from sqlalchemy_utils.functions import create_database
-from pyg_base import cfg_read, dumps, loads, as_list, dictable, Dict, is_dict, is_dictable, is_strs, is_str, is_int, ulist, try_back, unique
+from pyg_base import cfg_read, dumps, loads, as_list, dictable, Dict, is_dict, is_dictable, is_strs, is_str, is_int, ulist, try_back, unique, encode, decode
 from pyg_encoders import as_reader, as_writer
 from sqlalchemy import Table, Column, Integer, String, MetaData, Identity, Float, DATE, DATETIME, TIME, select, func, not_, desc, asc
 from sqlalchemy.orm import Session
@@ -10,6 +10,7 @@ from copy import copy
 _id = '_id'
 _doc = 'doc'
 _root = 'root'
+_deleted = 'deleted'
 
 DRIVER = None
 SERVER = None
@@ -136,10 +137,15 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         elif len(values)>2:
             raise ValueError('not sure how to translate this %s into a db.table format'%table)
     e = get_engine(server = server, db = db)
+    
     non_null = non_null or {}
     nullable = nullable or {}
+    pks = pk or {}
+    if isinstance(pks, list):
+        pks = {k : String for k in pks}
     if isinstance(non_null, list):
         non_null = {k : String for k in non_null}
+    pks.update(non_null)
     if isinstance(nullable, list):
         nullable = {k : String for k in nullable}
     if isinstance(table, str):
@@ -148,7 +154,7 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         table_name = table.name
         schema = schema or table.schema
     if doc is True:
-        doc = _doc        
+        doc = _doc
     meta = MetaData()
     i = sa.inspect(e)
     if not i.has_table(table_name, schema = schema):
@@ -173,9 +179,9 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
                         raise ValueError('not sure how to create an automatic item with column %s'%t)
 
         col_names = [col.name for col in cols]
-        non_nulls = [Column(k, _types.get(t, t), nullable = False) for k, t in non_null.items() if k not in col_names]
+        non_nulls = [Column(k, _types.get(t, t), nullable = False) for k, t in pks.items() if k not in col_names]
         nullables = [Column(k.lower(), _types.get(t, t)) for k, t in nullable.items() if k not in col_names] 
-        docs = [Column(doc, String, nullable = True)] if doc is not None else []            
+        docs = [Column(doc, String, nullable = True)] if doc is not None else []
         cols = cols + non_nulls + nullables + docs
         tbl = Table(table_name, meta, *cols)
         meta.create_all(e)
@@ -183,7 +189,7 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         meta.reflect(e)
         tbl = meta.tables[table_name]
         cols = tbl.columns
-        non_nulls = [Column(k, _types.get(t, t), nullable = False) for k, t in non_null.items()]
+        non_nulls = [Column(k, _types.get(t, t), nullable = False) for k, t in pks.items()]
         if non_nulls is not None:
             for key in non_nulls:
                 if key.name not in cols.keys():
@@ -689,7 +695,173 @@ class sql_cursor(object):
         res.selection = value
         return res
     
-    def docs(self, start = None, stop = None, step = None):
+    def _enrich(self, doc, columns = None):
+        """
+        We assume we receive a dict of key:values which go into the db.
+        some of the values may in fact be an entire document
+        """
+        docs = {k : v for k, v in doc.items() if isinstance(v, dict)}
+        columns = ulist(self.columns if columns is None else columns)
+        res = type(doc)({key : value for key, value in doc.items() if key in columns}) ## These are the only valid columns to the table
+        if len(docs) == 0:
+            return res
+        missing = {k : [] for k in columns if k not in doc}
+        for doc in docs.values():
+            for m in missing:
+                if m in doc:
+                    missing[m].append(doc[m])
+        found = {k : v[0] for k, v in missing.items() if len(set(v)) == 1}
+        conflicted = {k : v for k, v in missing.items() if len(set(v)) > 1}
+        if conflicted:
+            raise ValueError('got multiple possible values for each of these columns: %s'%conflicted)
+        res.update(found)
+        return res
+                
+    def insert_one(self, doc, ignore_bad_keys = False, write = True):
+        """
+        insert a single document to the table
+
+        Parameters
+        ----------
+        doc : dict
+            record.
+        ignore_bad_keys : 
+            Suppose you have a document with EXTRA keys. Rather than filter the document, set ignore_bad_keys = True and we will drop irrelevant keys for you
+
+        """
+        edoc = self._dock(doc) if write else doc
+        columns = self.columns
+        if not ignore_bad_keys:
+            bad_keys = {key: value for key, value in edoc.items() if key not in columns}
+            if len(bad_keys) > 0:
+                raise ValueError('cannot insert into db a document with these keys: %s. The table only has these keys: %s'%(bad_keys, columns))        
+        res = self._write_doc(edoc, columns = columns) if write else edoc
+        if self._pk and not self._is_deleted():
+            doc_id = self._id(res)
+            ids = self._ids
+            res_no_ids = type(res)({k : v for k, v in res.items() if k not in ids}) if ids else res
+            tbl = self.inc().inc(**doc_id)
+            rows = self.sort(ids)._read_statement() ## row format
+            docs = self._rows_to_docs(rows, reader = False, load = False) ## do not transform the document, keep in raw format
+            if len(docs) == 0:
+                with self.engine.connect() as conn: 
+                    conn.execute(self.table.insert(),[res_no_ids])
+                if ids:    
+                    latest = tbl[0]
+                    doc.update(latest[ids])
+            else:                
+                if len(docs) == 1:
+                    latest = docs[0] 
+                else:
+                    latest = docs[-1]
+                    tbl.exc(**tbl._id(latest)).full_delete()
+                latest = Dict(latest)
+                deleted = datetime.datetime.now()
+                for d in docs:
+                    for i in ids:
+                        if i in d:
+                            del d[i]
+                    d[_deleted] = deleted
+                self.deleted.insert_many(docs, write = False)
+                self.inc(self._id(latest)).update(**(res_no_ids))
+                doc.update(latest[ids])
+        else:
+            with self.engine.connect() as conn:
+                conn.execute(self.table.insert(), [res])
+        return doc
+    
+    
+    def _dock(self, doc, columns = None):
+        """
+        converts a usual looking document into a {self.doc : doc} format. 
+        We then enrich the new document with various parameters. 
+        This prepares it for "docking" in the database
+        """
+        
+        columns = columns or self.columns
+        edoc = self._enrich(doc, columns)
+        if self.doc is None or isinstance(edoc.get(self.doc), dict):
+            return edoc
+        else:
+            edoc = {key: value for key, value in edoc.items() if key in columns}
+            edoc[self.doc] = doc
+            return edoc
+
+    def _writer(self, writer = None, doc = None, kwargs = None):
+        doc = doc or {}
+        if writer is None:
+            writer = doc.get(_root)
+        if writer is None:
+            writer = self.writer
+        return as_writer(writer, kwargs = kwargs)
+            
+    def _write_doc(self, doc, writer = None, columns = None):
+        columns = columns or self.columns
+        writer = self._writer(writer, doc = doc, kwargs = doc)
+        res = type(doc)({key: self._write_item(value, writer = writer) for key, value in doc.items() if key in columns})
+        #res = self._dock(res, columns = columns) if dock else res
+        return res
+
+    def _write_item(self, item, writer = None, kwargs = None):
+        """
+        This does NOT handle the entire document. 
+        """
+        if not isinstance(item, dict):
+            return item
+        writer = self._writer(writer, item, kwargs = kwargs)
+        res = item.copy()
+        for w in as_list(writer):
+            res = w(res)
+        if isinstance(res, dict):
+            res = dumps(res)
+        return res
+    
+    def _undock(self, doc, columns = None):
+        """
+        converts a document which is of the format {self.doc : doc} into a regular looking document
+        """
+        if self.doc is None or not isinstance(doc.get(self.doc), dict):
+            return Dict(doc) if type(doc) == dict else doc
+        res = doc[self.doc]
+        columns = columns or self.columns
+        for col in columns - self.doc:
+            if col in doc and col not in res:
+                res[col] = doc[col]
+        return Dict(res) if type(res) == dict else res
+
+    def _reader(self, reader = None):
+        return as_reader(self.reader if reader is None else reader)
+
+    def _read_item(self, item, reader = None, load = True):
+        reader = self._reader(reader)
+        res = item
+        if is_str(res) and res.startswith('{') and load:
+            res = loads(res)
+        for r in as_list(reader):
+            res = res[r] if is_strs(r) else r(res)
+        return res
+
+    def _read_row(self, row, reader = None, columns = None, load = True):
+        """
+        reads a tuple of values (assumed to match the  columns)
+        converts them into a dict document, does not yet undock them
+        """
+        reader = self._reader(reader)
+        res = row
+        if isinstance(res, sa.engine.row.LegacyRow):
+            res = tuple(res)
+        if isinstance(res, (list, tuple)):
+            res = type(res)([self._read_item(item, reader = reader, load = load) for item in res])
+            if columns:
+                if len(columns) != len(res):
+                    raise ValueError('mismatch in columns')
+                res = dict(zip(columns, res)) # this zip can be evil
+        return res
+    
+    def _read_statement(self, start = None, stop = None, step = None):
+        """
+        returns a list of records from the database. returns a list of tuples
+        """
         statement = self.statement()
         if (is_int(start) and start < 0) or (is_int(stop) and stop < 0):
             n = len(self)
@@ -702,9 +874,23 @@ class sql_cursor(object):
             statement = statement.limit(1+stop)
         res = list(self.engine.connect().execute(statement))
         rows = res[slice(start, stop, step)]
-        rows = [self._read(row) for row in rows]
-        rs = dictable(rows, as_list(self.selection) if self.selection else self.columns) ## we want to convert actually to columns...
-        return rs        
+        return rows
+    
+    def _rows_to_docs(self, rows, reader = None, load = True):
+        """
+        starts at raw values from the database and returns a list of read-dicts (or a single dict) from the database
+        """
+        columns = as_list(self.selection) if self.selection else self.columns
+        reader = self._reader(reader)
+        if isinstance(rows, list):
+            return [self._read_row(row, reader = reader, columns = columns, load = load) for row in rows]
+        else:        
+            return self._read_row(rows, reader = reader, columns = columns, load = load)
+
+    def docs(self, start = None, stop = None, step = None):
+        rows = self._read_statement(start = start, stop = stop, step = step)
+        docs = self._rows_to_docs(rows)
+        return dictable(docs)
                 
     def __getitem__(self, value):
         """
@@ -734,125 +920,29 @@ class sql_cursor(object):
 
         elif isinstance(value, slice):
             start, stop, step = value.start, value.stop, value.step
-            res = self.docs(start = start, stop = stop, step = step)
+            rows = self._read_statement(start = start, stop = stop, step = step)
+            docs = self._rows_to_docs(rows)
             columns = self.columns
-            res = dictable([self._undock(row, columns = columns) for row in res])
+            res = dictable([self._undock(doc, columns = columns) for doc in docs])
             return res
 
         elif is_int(value):
             value = len(self) + value if value < 0 else value
             statement = self.statement()
             if self.order is None:
-                res = list(self.engine.connect().execute(statement.limit(value+1)))[value]
+                row = list(self.engine.connect().execute(statement.limit(value+1)))[value]
             else:
-                res = list(self.engine.connect().execute(statement.offset(value).limit(1)))[0]                
-            res = self._read(res)
-            rtn = Dict(zip(as_list(self.selection) if self.selection else self.columns, res))
-            rtn = self._undock(rtn)
-            return rtn    
-
-    def _enrich(self, doc, columns = None):
-        """
-        We assume we receive a dict of key:values which go into the db.
-        some of the values may in fact be an entire document
-        """
-        docs = {k : v for k, v in doc.items() if isinstance(v, dict)}
-        columns = ulist(self.columns if columns is None else columns)
-        res = type(doc)({key : value for key, value in doc.items() if key in columns}) ## These are the only valid columns to the table
-        if len(docs) == 0:
-            return res
-        missing = {k : [] for k in columns if k not in doc}
-        for doc in docs.values():
-            for m in missing:
-                if m in doc:
-                    missing[m].append(doc[m])
-        found = {k : v[0] for k, v in missing.items() if len(set(v)) == 1}
-        conflicted = {k : v for k, v in missing.items() if len(set(v)) > 1}
-        if conflicted:
-            raise ValueError('got multiple possible values for each of these columns: %s'%conflicted)
-        res.update(found)
-        return res
-                
-    def insert_one(self, doc, ignore_bad_keys = False):
-        """
-        insert a single document to the table
-
-        Parameters
-        ----------
-        doc : dict
-            record.
-        ignore_bad_keys : 
-            Suppose you have a document with EXTRA keys. Rather than filter the document, set ignore_bad_keys = True and we will drop irrelevant keys for you
-
-        """
-        edoc = self._dock(doc)
-        columns = self.columns
-        if not ignore_bad_keys:
-            bad_keys = {key: value for key, value in edoc.items() if key not in columns}
-            if len(bad_keys) > 0:
-                raise ValueError('cannot insert into db a document with these keys: %s. The table only has these keys: %s'%(bad_keys, columns))        
-        res = self._write_doc(edoc, columns = columns)
-        if self._pk:
-            doc_id = self._id(res)
-            ids = self._ids
-            tbl = self.inc().inc(**doc_id)
-            docs = tbl[::]
-            if len(docs) == 0:
-                with self.engine.connect() as conn: 
-                    conn.execute(self.table.insert(),[res - ids])
-                if ids:    
-                    latest = tbl[0]
-                    doc.update(latest[ids])
-            else:
-                deleted_docs = docs - ids
-                deleted_docs['deleted'] = datetime.datetime.now()
-                self.deleted.insert(deleted_docs)
-                if len(docs) == 1:
-                    latest = docs[0] 
-                else:
-                    latest = docs.sort(ids)[-1]
-                    tbl.exc(**tbl._id(latest)).full_delete()
-                self.inc(self._id(latest)).update(**(res-ids))
-                doc.update(latest[ids])
-        else:
-            with self.engine.connect() as conn:
-                conn.execute(self.table.insert(), [res])
-        return doc
-    
-    
-    def _dock(self, doc, columns = None):
-        """
-        converts a usual looking document into a {self.doc : doc} format. We then enrich the new document with various parameters
-        """
-        columns = columns or self.columns
-        edoc = self._enrich(doc, columns)
-        if self.doc is None or isinstance(edoc.get(self.doc), dict):
-            return edoc
-        else:
-            edoc = {key: value for key, value in edoc.items() if key in columns}
-            edoc[self.doc] = doc
-            return edoc
-    
-    def _undock(self, doc, columns = None):
-        """
-        converts a document which is of the format {self.doc : doc} into a regular looking document
-        """
-        if self.doc is None or not isinstance(doc.get(self.doc),dict):
-            return doc
-        res = doc[self.doc]
-        columns = columns or self.columns
-        for col in columns - self.doc:
-            if col in doc:
-                res[col] = res.get(col, doc[col])
-        return Dict(res)
-
+                row = list(self.engine.connect().execute(statement.offset(value).limit(1)))[0]
+            doc = self._rows_to_docs(row)
+            rtn = self._undock(doc)
+            return rtn
     
     def update_one(self, doc, upsert = True):
         """
         Similar to insert, except will throw an error if upsert = False and an existing document is not there
         """
         edoc = self._dock(doc)
-        existing = self.inc().inc(**self._id(edoc))
+        existing = self.inc().inc(**self._id(doc))
         n = len(existing)
         if n == 0:
             if upsert is False:
@@ -863,7 +953,10 @@ class sql_cursor(object):
             return self.insert_one(edoc)
         elif n == 1:
             wdoc = self._write_doc(edoc)
-            existing.update(**(wdoc - self._ids))
+            for i in self._ids:
+                if i in wdoc:
+                    del wdoc[i]
+            existing.update(**wdoc)
             res = existing[0]
             res.update(edoc)
             return self._undock(res)
@@ -871,7 +964,7 @@ class sql_cursor(object):
             raise ValueError('multiple documents found matching %s '%edoc)
                 
             
-    def insert_many(self, docs):
+    def insert_many(self, docs, write = True):
         """
         insert multiple docs. 
 
@@ -881,16 +974,23 @@ class sql_cursor(object):
         """
         rs = dictable(docs)
         if len(rs) > 0:
-            if self._pk :
-                _ = [self.insert_one(doc) for doc in rs]
+            if self._pk and not self._is_deleted():
+                _ = [self.insert_one(doc, write = write) for doc in rs]
             else:
                 columns = self.columns - self._ids
-                rows = [self._dock(row, columns) for row in rs]
-                rows = [self._write_doc(row, columns = columns) for row in rows]
+                if write:
+                    rows = [self._dock(row, columns) for row in rs]
+                    rows = [self._write_doc(row, columns = columns) for row in rows]
+                else:
+                    rows = list(rs)
                 with self.engine.connect() as conn:
                     conn.execute(self.table.insert(), rows)
         return self
-    
+
+    def __iter__(self):
+        for i in range(len(self)):
+            yield self[i]
+
     def __add__(self, item):
         """
         if item is dict, equivalent to insert_one(item)
@@ -947,55 +1047,7 @@ class sql_cursor(object):
             raise ValueError('no document found for %s %s %s'%(doc, args, kwargs))
         elif len(res) > 1:
             raise ValueError('multiple documents found for %s %s %s'%(doc, args, kwargs))
-            
-    
-    def _reader(self, reader = None):
-        return as_reader(self.reader if reader is None else reader)
-
-    def _read(self, doc, reader = None):
-        """
-        converts doc from db into something we want
-        """
-        reader = self._reader(reader)
-        res = doc
-        if isinstance(doc, sa.engine.row.LegacyRow):
-            doc = tuple(doc)
-        if isinstance(doc, (list, tuple)):
-            return type(doc)([self._read(d, reader) for d in res])
-        elif is_str(doc) and doc.startswith('{'):
-            res = loads(res)
-            for r in as_list(reader):
-                res = res[r] if is_strs(r) else r(res)
-        return res
-        
-    def _writer(self, writer = None, doc = None, kwargs = None):
-        doc = doc or {}
-        if writer is None:
-            writer = doc.get(_root)
-        if writer is None:
-            writer = self.writer
-        return as_writer(writer, kwargs = kwargs)
-            
-    def _write_doc(self, doc, writer = None, columns = None):
-        columns = columns or self.columns
-        writer = self._writer(writer, doc = doc, kwargs = doc)
-        res = Dict({key: self._write_item(value, writer = writer) for key, value in doc.items() if key in columns})
-        return res
-
-    def _write_item(self, item, writer = None, kwargs = None):
-        """
-        This does NOT handle the entire document. 
-        """
-        if not isinstance(item, dict):
-            return item
-        writer = self._writer(writer, item, kwargs = kwargs)
-        res = item.copy()
-        for w in as_list(writer):
-            res = w(res)
-        if isinstance(res, dict):
-            res = dumps(res)
-        return res
-    
+                
     def _select(self):
         """
         performs a selection based on self.selection
@@ -1057,16 +1109,23 @@ class sql_cursor(object):
 
     def delete(self, **kwargs):
         res = self.inc(**kwargs)
+        ids = self._ids
         if len(res):
-            if self._pk: ## we first copy the existing data out to deleted db
-                docs = res[::]
-                docs['deleted'] = datetime.datetime.now()
-                self.deleted.insert(docs)
+            if self._pk and not self._is_deleted(): ## we first copy the existing data out to deleted db
+                rows = self._read_statement() 
+                docs = self._rows_to_docs(rows, reader = False, load = False)
+                deleted = datetime.datetime.now()
+                for doc in docs:
+                    doc[_deleted] = deleted
+                    for i in ids:
+                        if i in doc:
+                            del doc[i]
+                self.deleted.insert_many(docs, write = False)
             res.full_delete()
         return self
         
     def sort(self, order = None):
-        if order is None:
+        if not order:
             return self
         else:
             res = self.copy()
@@ -1105,15 +1164,19 @@ class sql_cursor(object):
     @property
     def deleted(self):
         if self._is_deleted():
-            return self.distinct('deleted')
+            return self
         else:        
             db_name = 'deleted_' + self.db
-            res = sql_table(table = self.table, db = db_name, non_null = dict(deleted = datetime.datetime), server = self.server)
+            res = sql_table(table = self.table, db = db_name, non_null = dict(deleted = datetime.datetime), 
+                            server = self.server, 
+                            pk = self.pk, 
+                            doc = self.doc, 
+                            writer = self.writer, 
+                            reader = self.reader, 
+                            schema = self.schema)
             res.spec = self.spec
             res.order = self.order
             res.selection = self.selection
-            res.doc = self.doc
-            res.pk = None
             return res
                 
     @property

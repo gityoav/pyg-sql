@@ -1,12 +1,11 @@
 import sqlalchemy as sa
 from sqlalchemy_utils.functions import create_database
-from pyg_base import cache, cfg_read, named_dict, dumps, loads, as_list, dictattr, dictable, Dict, decode, is_dict, is_dictable, is_strs, is_str, is_int, ulist, encode, passthru, try_back, unique
+from pyg_base import cfg_read, dumps, loads, as_list, dictable, Dict, is_dict, is_dictable, is_strs, is_str, is_int, ulist, try_back, unique
 from pyg_encoders import as_reader, as_writer
-from sqlalchemy import Table, Column, Integer, String, MetaData, Identity, Float, DATE, DATETIME, TIME, select, func, not_, and_, or_, desc, asc
+from sqlalchemy import Table, Column, Integer, String, MetaData, Identity, Float, DATE, DATETIME, TIME, select, func, not_, desc, asc
 from sqlalchemy.orm import Session
 import datetime
 from copy import copy
-import json
 
 _id = '_id'
 _doc = 'doc'
@@ -85,7 +84,7 @@ _types = {str: String, int : Integer, float: Float, datetime.date: DATE, datetim
 _orders = {1 : asc, True: asc, 'asc': asc, asc : asc, -1: desc, False: desc, 'desc': desc, desc: desc}
 
 
-def get_sql_table(table, db = None, non_null = None, nullable = None, _id = None, schema = None, server = None, reader = None, writer = None, pk = None, doc = None, mode = None):
+def sql_table(table, db = None, non_null = None, nullable = None, _id = None, schema = None, server = None, reader = None, writer = None, pk = None, doc = None, mode = None):
     """
     Creates a sql table. Can also be used to simply read table from the db
 
@@ -123,7 +122,7 @@ def get_sql_table(table, db = None, non_null = None, nullable = None, _id = None
 
     Returns
     -------
-    res : sql_table
+    res : sql_cursor
         A hybrid object we love.
 
     """
@@ -191,35 +190,45 @@ def get_sql_table(table, db = None, non_null = None, nullable = None, _id = None
                     raise ValueError('column %s does not exist in %s.%s'%(key, db, table_name))
                 elif cols[key.name].nullable is True:
                     raise ValueError('WARNING: You defined %s as a primary but it is nullable in %s.%s'%(key, db, table_name))
-    res = sql_table(table = tbl, db = db, server = server, engine = e, spec = None, selection = None, reader = reader, writer = writer, pk = pk, doc = doc)
+    res = sql_cursor(table = tbl, db = db, server = server, engine = e, spec = None, selection = None, reader = reader, writer = writer, pk = pk, doc = doc)
     return res
 
-class sql_table(object):
+class sql_cursor(object):
     """
-    sql_table is a thin wrapper of sqlalchemy (sa.Table), adding and simplifying functionaility:
-    sa.Table holds the logic while the engine manages the connection. So the logic is usually:
-        - create a statement
-        - establish a connection
-        - execute statement
+    # pyg-sql
+    
+    pyg-sql creates sql_cursor, a thin wrapper on sql-alchemy (sa.Table), providing three different functionailities:
 
-            
-    - sql_table holds both the Table and the engine objects so we can merge these operations into one call.
-    - In addition, we maintain the 'statement' so that a final selction statement can be built gradually rather than all at once
+    - simplified create/filter/sort/access of a sql table
+    - maintainance of a table where records are unique per specified primary keys while we auto-archive old data
+    - creation of a full no-sql like document-store
+
+    pyg-sql "abandons" the relational part of SQL: we make using a single table extremely easy while forgo any multiple-tables-relations completely.
     
-    - If primary keys (pk) are specified, sql_table also ensure we always have at most one entry of that key
-    - If doc is specified, the table is viewed as a document-store
+    ## access simplification
     
+    sqlalchemy use-pattern make Table create the "statement" and then let the engine session/connection to execute. sql_cursor keeps tabs internally of:
+
+    - the table
+    - the engine
+    - the "select", the "order by" and the "where" statements
+
+    This allows us to
+
+    - "query and execute" in one go
+    - build statements interactively, each time adding to previous "where" or "select"
+    
+
     :Example: table creation
     ------------------------
     >>> from pyg_base import * 
     >>> from pyg_sql import * 
     >>> import datetime
     
-    >>> t = get_sql_table(db = 'test', table = 'students', non_null = ['name', 'surname'], 
+    >>> t = sql_table(db = 'test', table = 'students', non_null = ['name', 'surname'], 
                           _id = dict(_id = int, created = datetime.datetime), 
                           nullable =  dict(doc = str, details = str, dob = datetime.date, age = int, grade = float))
     >>> t = t.delete()
-    >>> assert len(t) == 0; assert t.count() == 0
 
 
     :Example: table insertion
@@ -254,6 +263,54 @@ class sql_table(object):
     >>> assert len(t.inc(t.c.age > 30)) == 2  # can filter using the standard sql-alchemy .c.column objects
     >>> assert len(t.where(t.c.age > 30)) == 2  # can filter using the standard sql-alchemy "where" statement 
 
+
+    ## insertion of "documents" into string columns...
+    
+    It is important to realise that we already have much flexibility behind the scene in using "documents" inside string columns:
+
+    >>> t = t.delete()
+    >>> assert len(t) == 0; assert t.count() == 0
+    >>> import numpy as np
+    >>> t.insert(name = 'yoav', surname = 'git', details = dict(kids = {'ayala' : dict(age = 17, gender = 'f'), 'opher' : dict(age = 16, gender = 'f'), 'itamar': dict(age = 11, gender = 'm')}, salary = np.array([100,200,300]), ))
+
+    >>> t[0] # we can grab the full data back!
+
+    {'_id': 81,
+     'created': datetime.datetime(2022, 6, 30, 0, 10, 33, 900000),
+     'name': 'yoav',
+     'surname': 'git',
+     'doc': None,
+     'details': {'kids': {'ayala':  {'age': 17, 'gender': 'f'},
+                          'opher':  {'age': 16, 'gender': 'f'},
+                          'itamar': {'age': 11, 'gender': 'm'}},
+                 'salary': array([100, 200, 300])},
+     'dob': None,
+     'age': None,
+     'grade': None}
+
+    >>> class Temp():
+            pass
+            
+    >>> t.insert(name = 'anna', surname = 'git', details = dict(temp = Temp())) ## yep, we can store actual objects...
+    >>> t[1]  # and get them back as proper objects on loading
+
+    {'_id': 83,
+     'created': datetime.datetime(2022, 6, 30, 0, 16, 10, 340000),
+     'name': 'anna',
+     'surname': 'git',
+     'doc': None,
+     'details': {'temp': <__main__.Temp at 0x1a91d9fd3a0>},
+     'dob': None,
+     'age': None,
+     'grade': None}
+
+    ## primary keys and auto-archive
+    
+    Primary Keys are applied if the primary keys (pk) are specified. 
+    Now, when we insert into a table, if another record with same pk exists, the record will be replaced.
+    Rather than simply delete old records, we create automatically a parallel deleted_database.table to auto-archive these replaced records.
+    This ensure a full audit and roll-back of records is possible.
+
     :Example: primary keys and deleted records
     ------------------------------------------
     The table as set up can have multiple items so:
@@ -265,7 +322,7 @@ class sql_table(object):
     >>> assert len(t) == 3
     
     >>> t = t.delete() 
-    >>> t = get_sql_table(db = 'test', table = 'students', non_null = ['name', 'surname'], 
+    >>> t = sql_table(db = 'test', table = 'students', non_null = ['name', 'surname'], 
                           _id = dict(_id = int, created = datetime.datetime), 
                           nullable =  dict(doc = str, details = str, dob = datetime.date, age = int, grade = float), 
                           pk = ['name', 'surname'])         ## <<<------- We set primary keys
@@ -274,27 +331,37 @@ class sql_table(object):
     >>> t = t.insert(name = 'yoav', surname = 'git', age = 46)
     >>> t = t.insert(name = 'yoav', surname = 'git', age = 47)
     >>> t = t.insert(name = 'yoav', surname = 'git', age = 48)
-    >>> assert len(t) == 1
+    >>> assert len(t) == 1 
     >>> assert t[0].age == 48
 
     Where did the data go to? We automatically archive the deleted old records for dict(name = 'yoav', surname = 'git') here:
 
     >>> t.deleted 
     
-    t.deleted is a table by same name
+    t.deleted is a table by same name,
+    
     - exists on deleted_test database, 
     - same table structure with added 'deleted' column
     
     >>> assert len(t.deleted.inc(name = 'yoav', age = 46)) > 0
     >>> t.deleted.delete() 
-    
+
+    ## sql_cursor as a document store
+
+    If we set doc = True, the table will be viewed internally as a no-sql-like document store. 
+
+    - the nullable columns supplied are the columns on which querying will be possible
+    - the primary keys are still used to ensure we have one document per unique pk
+    - the document is jsonified (handling non-json stuff like dates, np.array and pd.DataFrames) and put into the 'doc' column in the table, but this is invisible to the user.
+
     :Example: doc management
     ------------------------
+    
     We now suppose that we are not sure what records we want to keep for each student
 
     >>> from pyg import *
     >>> import datetime
-    >>> t = get_sql_table(db = 'test', table = 'unstructured_students', non_null = ['name', 'surname'], 
+    >>> t = sql_table(db = 'test', table = 'unstructured_students', non_null = ['name', 'surname'], 
                           _id = dict(_id = int, created = datetime.datetime), 
                           nullable =  dict(doc = str, details = str, dob = datetime.date, age = int, grade = float), 
                           pk = ['name', 'surname'],
@@ -311,15 +378,16 @@ class sql_table(object):
     >>> doc2 = dict(name = 'anna', surname = 'git', age = 28, employer = 'Cambridge University', hobbies = ['chess', 'music', 'swimming'])
     >>> _ = t.insert_one(doc2)
     >>> assert t[dict(age = 28)].hobbies == ['chess', 'music', 'swimming']  # Note that we can filter or search easily using the column 'age' that was specified in table. We cannot do this on 'employer'
-
-    : Example: document store containing pd.DataFrames.
+    
+    :Example: document store containing pd.DataFrames.
     ----------
+    
     >>> from pyg import *
     >>> doc = dict(name = 'yoav', surname = 'git', age = 35, 
                    salary = pd.Series([100,200,300], drange(2)),
                    costs = pd.DataFrame(dict(transport = [0,1,2], food = [4,5,6], education = [10,20,30]), drange(2)))
     
-    >>> t = get_sql_table(db = 'test', table = 'unstructured_students', non_null = ['name', 'surname'], 
+    >>> t = sql_table(db = 'test', table = 'unstructured_students', non_null = ['name', 'surname'], 
                           _id = dict(_id = int, created = datetime.datetime), 
                           nullable =  dict(doc = str, details = str, dob = datetime.date, age = int, grade = float), 
                           pk = ['name', 'surname'],
@@ -336,8 +404,6 @@ class sql_table(object):
     >>> read_from_file = pd_read_parquet('c:/temp/yoav/git/salary.parquet')
     >>> assert list(read_from_db.salary.values) == [100, 200, 300]
     >>> assert list(read_from_file.values) == [100, 200, 300]
-    
-
     """
     def __init__(self, table, db = None, engine = None, server = None, spec = None, selection = None, order = None, reader = None, writer = None, pk = None, doc = None, **_):
         """
@@ -366,9 +432,9 @@ class sql_table(object):
             
         """
         if is_str(table):
-            table = get_sql_table(table = table, db = db, server = server)
+            table = sql_table(table = table, db = db, server = server)
             
-        if isinstance(table, sql_table):
+        if isinstance(table, sql_cursor):
             db = table.db if db is None else db
             engine = table.engine if engine is None else engine
             server = table.server if server is None else server
@@ -1031,7 +1097,7 @@ class sql_table(object):
         return res
     
     def __repr__(self):
-        return 'sql_table: %(db)s.%(table)s%(pk)s %(doc)s\n%(statement)s\n%(n)i records'%dict(db = self.db, table = self.table.name, doc = 'DOCSTORE[%s]'%self.doc if self.doc else '', pk = self._pk if self._pk else '', n = len(self), statement = str(self.statement()).replace(self.table.name+'.',''))
+        return 'sql_cursor: %(db)s.%(table)s%(pk)s %(doc)s\n%(statement)s\n%(n)i records'%dict(db = self.db, table = self.table.name, doc = 'DOCSTORE[%s]'%self.doc if self.doc else '', pk = self._pk if self._pk else '', n = len(self), statement = str(self.statement()).replace(self.table.name+'.',''))
                 
     def _is_deleted(self):
         return self.db.startswith('deleted_')
@@ -1042,7 +1108,7 @@ class sql_table(object):
             return self.distinct('deleted')
         else:        
             db_name = 'deleted_' + self.db
-            res = get_sql_table(table = self.table, db = db_name, non_null = dict(deleted = datetime.datetime), server = self.server)
+            res = sql_table(table = self.table, db = db_name, non_null = dict(deleted = datetime.datetime), server = self.server)
             res.spec = self.spec
             res.order = self.order
             res.selection = self.selection

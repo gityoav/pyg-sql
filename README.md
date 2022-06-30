@@ -1,24 +1,24 @@
 # pyg-sql
 
-pyg-sql creates sql_table, a thin wrapper on sql-alchemy (sa.Table), providing three different functionailities:
+pyg-sql creates sql_cursor (and its constructor, sql_table), a thin wrapper on sql-alchemy (sa.Table), providing three different functionailities:
 
     - simplified create/filter/sort/access of a sql table
     - maintainance of a table where records are unique per specified primary keys while we auto-archive old data
     - creation of a full no-sql like document-store
 
-pyg-sql "abandons" the relational part of SQL: we make using a single table extremely easy while forgo any multiple-tables-relations completely.
+pyg-sql "abandons" the relational part of SQL: we make using a *single* table extremely easy while forgo any multiple-tables-relations completely.
 
 ## access simplification
 
-sqlalchemy use-pattern make Table create the "statement" and then let the engine session/connection to execute. sql_table keeps tabs internally of:
+sqlalchemy use-pattern makes Table create the "statement" and then let the engine session/connection execute. Conversely, the sql_cursor keeps tabs internally of:
 
     - the table
     - the engine
-    - the "select", the "order by" and the "where" statements
+    - the "select", the "order by" and the "where" expressions
 
 This allows us to
     - "query and execute" in one go
-    - build statements interactively, each time adding to previous "where" or "select"
+    - build statements interactively, each time adding select/where/sort to previous where/select
     
 
     :Example: table creation
@@ -27,7 +27,7 @@ This allows us to
     >>> from pyg_sql import * 
     >>> import datetime
     
-    >>> t = get_sql_table(db = 'test', table = 'students', non_null = ['name', 'surname'], 
+    >>> t = sql_table(db = 'test', table = 'students', non_null = ['name', 'surname'], 
                           _id = dict(_id = int, created = datetime.datetime), 
                           nullable =  dict(doc = str, details = str, dob = datetime.date, age = int, grade = float))
     >>> t = t.delete()
@@ -124,7 +124,7 @@ This ensure a full audit and roll-back of records is possible.
     >>> assert len(t) == 3
     
     >>> t = t.delete() 
-    >>> t = get_sql_table(db = 'test', table = 'students', non_null = ['name', 'surname'], 
+    >>> t = sql_table(db = 'test', table = 'students', non_null = ['name', 'surname'], 
                           _id = dict(_id = int, created = datetime.datetime), 
                           nullable =  dict(doc = str, details = str, dob = datetime.date, age = int, grade = float), 
                           pk = ['name', 'surname'])         ## <<<------- We set primary keys
@@ -148,7 +148,7 @@ This ensure a full audit and roll-back of records is possible.
     >>> assert len(t.deleted.inc(name = 'yoav', age = 46)) > 0
     >>> t.deleted.delete() 
 
-## sql_table as a document store
+## sql_cursor as a document store
 
     If we set doc = True, the table will be viewed internally as a no-sql-like document store. 
 
@@ -163,7 +163,7 @@ This ensure a full audit and roll-back of records is possible.
 
     >>> from pyg import *
     >>> import datetime
-    >>> t = get_sql_table(db = 'test', table = 'unstructured_students', non_null = ['name', 'surname'], 
+    >>> t = sql_table(db = 'test', table = 'unstructured_students', non_null = ['name', 'surname'], 
                           _id = dict(_id = int, created = datetime.datetime), 
                           nullable =  dict(doc = str, details = str, dob = datetime.date, age = int, grade = float), 
                           pk = ['name', 'surname'],
@@ -189,7 +189,7 @@ This ensure a full audit and roll-back of records is possible.
                    salary = pd.Series([100,200,300], drange(2)),
                    costs = pd.DataFrame(dict(transport = [0,1,2], food = [4,5,6], education = [10,20,30]), drange(2)))
     
-    >>> t = get_sql_table(db = 'test', table = 'unstructured_students', non_null = ['name', 'surname'], 
+    >>> t = sql_table(db = 'test', table = 'unstructured_students', non_null = ['name', 'surname'], 
                           _id = dict(_id = int, created = datetime.datetime), 
                           nullable =  dict(doc = str, details = str, dob = datetime.date, age = int, grade = float), 
                           pk = ['name', 'surname'],

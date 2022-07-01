@@ -1,5 +1,10 @@
 # pyg-sql
 
+## installation
+
+* conda install from https://anaconda.org/yoavgit/pyg-sql 
+* pip install from https://pypi.org/project/pyg-sql/
+
 pyg-sql creates sql_cursor (and its constructor, sql_table), a thin wrapper on sql-alchemy (sa.Table), providing three different functionailities:
 
     - simplified create/filter/sort/access of a sql table

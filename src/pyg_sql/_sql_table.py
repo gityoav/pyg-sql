@@ -1,6 +1,6 @@
 import sqlalchemy as sa
 from sqlalchemy_utils.functions import create_database
-from pyg_base import cfg_read, dumps, loads, as_list, dictable, Dict, is_dict, is_dictable, is_strs, is_str, is_int, ulist, try_back, unique, encode, decode
+from pyg_base import cfg_read, dumps, loads, as_list, dictable, Dict, is_dict, is_dictable, is_strs, is_str, is_int, is_date, dt2str, ulist, try_back, unique, encode, decode
 from pyg_encoders import as_reader, as_writer
 from sqlalchemy import Table, Column, Integer, String, MetaData, Identity, Float, DATE, DATETIME, TIME, select, func, not_, desc, asc
 from sqlalchemy.orm import Session
@@ -741,8 +741,8 @@ class sql_cursor(object):
             ids = self._ids
             res_no_ids = type(res)({k : v for k, v in res.items() if k not in ids}) if ids else res
             tbl = self.inc().inc(**doc_id)
-            rows = self.sort(ids)._read_statement() ## row format
-            docs = self._rows_to_docs(rows, reader = False, load = False) ## do not transform the document, keep in raw format
+            rows = tbl.sort(ids)._read_statement() ## row format
+            docs = tbl._rows_to_docs(rows, reader = False, load = False) ## do not transform the document, keep in raw format
             if len(docs) == 0:
                 with self.engine.connect() as conn: 
                     conn.execute(self.table.insert(),[res_no_ids])
@@ -941,17 +941,17 @@ class sql_cursor(object):
         """
         Similar to insert, except will throw an error if upsert = False and an existing document is not there
         """
-        edoc = self._dock(doc)
         existing = self.inc().inc(**self._id(doc))
         n = len(existing)
         if n == 0:
             if upsert is False:
-                raise ValueError('no documents found to update %s'%edoc)
+                raise ValueError('no documents found to update %s'%doc)
             else:
-                return self.insert_one(edoc)
+                return self.insert_one(doc)
         elif self._pk:
-            return self.insert_one(edoc)
+            return self.insert_one(doc)
         elif n == 1:
+            edoc = self._dock(doc)
             wdoc = self._write_doc(edoc)
             for i in self._ids:
                 if i in wdoc:
@@ -961,7 +961,7 @@ class sql_cursor(object):
             res.update(edoc)
             return self._undock(res)
         elif n > 1:
-            raise ValueError('multiple documents found matching %s '%edoc)
+            raise ValueError('multiple documents found matching %s '%doc)
                 
             
     def insert_many(self, docs, write = True):
@@ -1156,8 +1156,18 @@ class sql_cursor(object):
         return res
     
     def __repr__(self):
-        return 'sql_cursor: %(db)s.%(table)s%(pk)s %(doc)s\n%(statement)s\n%(n)i records'%dict(db = self.db, table = self.table.name, doc = 'DOCSTORE[%s]'%self.doc if self.doc else '', pk = self._pk if self._pk else '', n = len(self), statement = str(self.statement()).replace(self.table.name+'.',''))
-                
+        statement = self.statement()
+        params = statement.compile().params
+        text = str(statement).replace(self.table.name+'.','')
+        for k,v in params.items():
+            text = text.replace(':'+k, '"%s"'%v if is_str(v) else dt2str(v) if is_date(v) else str(v))
+            
+        res = 'sql_cursor: %(db)s.%(table)s%(pk)s %(doc)s\n%(statement)s\n%(n)i records'%dict(db = self.db, table = self.table.name, doc = 'DOCSTORE[%s]'%self.doc if self.doc else '', 
+                                                                                              pk = self._pk if self._pk else '', 
+                                                                                              n = len(self), 
+                                                                                              statement = text)
+        return res
+
     def _is_deleted(self):
         return self.db.startswith('deleted_')
 

@@ -1,15 +1,15 @@
 # pyg-sql
 
-## installation
+## Intriduction
 
 * conda install from https://anaconda.org/yoavgit/pyg-sql 
 * pip install from https://pypi.org/project/pyg-sql/
 
 pyg-sql creates sql_cursor (and its constructor, sql_table), a thin wrapper on sql-alchemy (sa.Table), providing three different functionailities:
 
-    - simplified create/filter/sort/access of a sql table
-    - maintainance of a table where records are unique per specified primary keys while we auto-archive old data
-    - creation of a full no-sql like document-store
+* simplified create/filter/sort/access of a sql table
+* maintainance of a table where records are unique per specified primary keys while we auto-archive old data
+* creation of a full no-sql like document-store
 
 pyg-sql "abandons" the relational part of SQL: we make using a *single* table extremely easy while forgo any multiple-tables-relations completely.
 

@@ -143,11 +143,17 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
     pks = pk or {}
     if isinstance(pks, list):
         pks = {k : String for k in pks}
+    elif isinstance(pks, str):
+        pks = {pks : String}
     if isinstance(non_null, list):
         non_null = {k : String for k in non_null}
+    elif isinstance(non_null, str):
+        non_null = {non_null : String}
     pks.update(non_null)
     if isinstance(nullable, list):
         nullable = {k : String for k in nullable}
+    elif isinstance(nullable, str):
+        nullable = {nullable: String}
     if isinstance(table, str):
         table_name = table 
     else:
@@ -1162,7 +1168,8 @@ class sql_cursor(object):
         for k,v in params.items():
             text = text.replace(':'+k, '"%s"'%v if is_str(v) else dt2str(v) if is_date(v) else str(v))
             
-        res = 'sql_cursor: %(db)s.%(table)s%(pk)s %(doc)s\n%(statement)s\n%(n)i records'%dict(db = self.db, table = self.table.name, doc = 'DOCSTORE[%s]'%self.doc if self.doc else '', 
+        res = 'sql_cursor: %(db)s.%(table)s%(pk)s %(doc)s %(w)s\n%(statement)s\n%(n)i records'%dict(db = self.db, table = self.table.name, doc = 'DOCSTORE[%s]'%self.doc if self.doc else '', 
+                                                                                              w = 'writer = %s'%self.writer if is_str(self.writer) else '',
                                                                                               pk = self._pk if self._pk else '', 
                                                                                               n = len(self), 
                                                                                               statement = text)

@@ -15,7 +15,7 @@ _deleted = 'deleted'
 DRIVER = None
 SERVER = None
 
-def _server(server = None):
+def get_server(server = None):
     """
     determines the sql server striing
     """
@@ -27,7 +27,7 @@ def _server(server = None):
         raise ValueError('please provide server or set a "sql_server" in cfg file: from pyg_base import *; cfg = cfg_read(); cfg["sql_server"] = "server"; cfg_write(cfg)')
     return server
 
-def _driver(driver = None):
+def get_driver(driver = None):
     """
     determines the sql server driver
     """
@@ -38,40 +38,63 @@ def _driver(driver = None):
         import pyodbc
         odbc_drivers = [d for d in pyodbc.drivers() if d.startswith('ODBC')]
         if len(odbc_drivers):
-            driver = sorted(odbc_drivers)[-1].replace(' ', '+')
+            driver = sorted(odbc_drivers)[-1]
         if driver is None:
             raise ValueError('No ODBC drivers found for SQL Server, please save one: cfg = cfg_read(); cfg["sql_driver"] = "ODBC+Driver+17+for+SQL+Server"; cfg_write(cfg)')    
         else:
+            driver = driver.replace(' ', '+')
             return driver
     elif is_int(driver):
         return 'ODBC+Driver+%i+for+SQL+Server'%driver
     else:
         return driver
+
+
+def _pairs2connection(*pairs, **connection):
+    connection = connection.copy()
+    for pair in pairs:
+        ps = pair.split(';')
+        for p in ps:
+            k, v = p.split('=')
+            k = k.strip()
+            v = v.strip()
+            connection[k] = v
+    connection = {k.lower() : v.replace(' ','+').replace('{','').replace('}','') for k, v in connection.items() if v is not None}
+    return connection
+
+def _db(connection):
+    db = connection.pop('db', None)
+    if db is None:
+        db = connection.pop('database', 'master')
+    return db
     
-DRIVER = _driver()
-SERVER = _server()
-    
-def get_cstr(db = 'master', server = None, driver = None, trusted_connection = 'yes', user = None, password = None):
+def get_cstr(*pairs, **connection):
     """
-    determines the connection string, at the moment 'user' and 'password' are not used and are mere place-holders
+    determines the connection string
     """
-    server = _server(server) 
-    driver = _driver(driver)
+    connection = _pairs2connection(*pairs, **connection)
+    server = get_server(connection.pop('server', None))
+    connection['driver'] = get_driver(connection.pop('driver', None))
+    db = _db(connection)
     if '//' in server:
         return server
     else:
-        connection = {k:v for k,v in dict(driver = driver, trusted_connection = trusted_connection, user = user, password = password).items() if v is not None}
-        params = '&'.join('%s=%s'%(k,v) for k,v in connection.items())        
-        return 'mssql+pyodbc://%(server)s/%(db)s%(params)s'%dict(server=server, db = db or 'master', params = '?' +params if params else '')
+        params = '&'.join('%s=%s'%(k,v) for k,v in connection.items())
+        return 'mssql+pyodbc://%(server)s/%(db)s%(params)s'%dict(server=server, db = db, params = '?' +params if params else '')
 
-def get_engine(db = 'master', server = None, driver = None, trusted_connection = 'yes', user = None, password = None):    
+def get_engine(*pairs, **connection):    
     """
     returns a sqlalchemy engine object
+    accepts either *pairs: 'driver={ODBC Driver 17 for SQL Server}'
+    or keyword arguments that look like driver = 'ODBC Driver 17 for SQL Server'    
     """
+    connection = _pairs2connection(*pairs, **connection)
+    server = get_server(connection.pop('server', None))
+    connection['driver'] = get_driver(connection.pop('driver', None))
+    db = _db(connection)    
     if isinstance(server, sa.engine.base.Engine):
         return server
-    driver = _driver()
-    cstr = get_cstr(server=server, db = db, driver = driver, trusted_connection = trusted_connection , user = user, password = password)    
+    cstr = get_cstr(server=server, db = db, **connection)    
     e = sa.create_engine(cstr)
     try:
         sa.inspect(e)
@@ -461,7 +484,7 @@ class sql_cursor(object):
     
         self.table = table
         self.db = db
-        self.server = _server(server)
+        self.server = get_server(server)
         self.engine = engine or get_engine(db = self.db, server = self.server)
         self.spec = spec
         self.selection = selection
@@ -1205,6 +1228,6 @@ class sql_cursor(object):
             A unique combination of the server address, db name and table name, identifying the table uniquely. This allows us to create an in-memory representation of the data in pyg-cell
 
         """
-        return ('server', self.server or _server()), ('db', self.db), ('table', self.table.name)
+        return ('server', self.server or get_server()), ('db', self.db), ('table', self.table.name)
 
 

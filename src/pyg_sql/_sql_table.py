@@ -57,7 +57,7 @@ def _pairs2connection(*pairs, **connection):
         for p in ps:
             k, v = p.split('=')
             k = k.strip()
-            v = v.strip()
+            v = v.strip().replace("'","")
             connection[k] = v
     connection = {k.lower() : v.replace(' ','+').replace('{','').replace('}','') for k, v in connection.items() if v is not None}
     return connection
@@ -215,8 +215,7 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         tbl = Table(table_name, meta, *cols)
         meta.create_all(e)
     else:
-        meta.reflect(e)
-        tbl = meta.tables[table_name]
+        tbl = Table(table_name, meta, autoload_with = e, schema = schema)
         cols = tbl.columns
         non_nulls = [Column(k, _types.get(t, t), nullable = False) for k, t in pks.items()]
         if non_nulls is not None:

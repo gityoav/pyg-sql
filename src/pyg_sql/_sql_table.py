@@ -1,7 +1,7 @@
 import sqlalchemy as sa
 from sqlalchemy_utils.functions import create_database
-from pyg_base import cfg_read, as_list, dictable, Dict, is_dict, is_dictable, is_strs, is_str, is_int, is_date, dt2str, ulist, try_back, unique
-from pyg_encoders import as_reader, as_writer, dumps, loads, encode, decode
+from pyg_base import cache, cfg_read, as_list, dictable, Dict, is_dict, is_dictable, is_strs, is_str, is_int, is_date, dt2str, ulist, try_back, unique
+from pyg_encoders import as_reader, as_writer, dumps, loads
 from sqlalchemy import Table, Column, Integer, String, MetaData, Identity, Float, DATE, DATETIME, TIME, select, func, not_, desc, asc
 from sqlalchemy.orm import Session
 import datetime
@@ -12,17 +12,24 @@ _doc = 'doc'
 _root = 'root'
 _deleted = 'deleted'
 
-DRIVER = None
-SERVER = None
 
+@cache
+def get_servers():
+    return cfg_read().get('sql_server', {})
+    
 def get_server(server = None):
     """
-    determines the sql server striing
+    Determines the sql server string
+    We support a server config which looks like:
+        config['sql_server'] = dict(dev = 'server.test', prod = 'prod.server')
     """
-    if server is None or server is True:
-        server = SERVER
-    if server is None or server is True:
-        server = cfg_read().get('sql_server')
+    servers = get_servers()
+    if isinstance(servers, str):
+        if server is None or server is True:
+            server = servers
+    else:
+        server = servers.get(server, server)
+        server = servers.get(server, server) #double redirection supported
     if server is None:
         raise ValueError('please provide server or set a "sql_server" in cfg file: from pyg_base import *; cfg = cfg_read(); cfg["sql_server"] = "server"; cfg_write(cfg)')
     return server
@@ -31,7 +38,6 @@ def get_driver(driver = None):
     """
     determines the sql server driver
     """
-    driver = driver or DRIVER
     if driver is None or driver is True:
         driver = cfg_read().get('sql_driver')
     if driver is None:

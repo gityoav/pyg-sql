@@ -14,8 +14,22 @@ _deleted = 'deleted'
 
 
 @cache
-def get_servers():
-    return cfg_read().get('sql_server', {})
+def _servers():
+    res = cfg_read().get('sql_server', {})
+    if isinstance(res, dict):
+        res[None] = res.get('null')
+        res[True] = res.get('true')
+        res[False] = res.get('false')
+    return res
+
+@cache
+def _schema():
+    return cfg_read().get('sql_schema', None)
+
+@cache
+def _database():
+    return cfg_read().get('sql_database', 'master')
+
     
 def get_server(server = None):
     """
@@ -23,7 +37,7 @@ def get_server(server = None):
     We support a server config which looks like:
         config['sql_server'] = dict(dev = 'server.test', prod = 'prod.server')
     """
-    servers = get_servers()
+    servers = _servers()
     if isinstance(servers, str):
         if server is None or server is True:
             server = servers
@@ -71,7 +85,7 @@ def _pairs2connection(*pairs, **connection):
 def _db(connection):
     db = connection.pop('db', None)
     if db is None:
-        db = connection.pop('database', 'master')
+        db = connection.pop('database', _database())
     return db
     
 def get_cstr(*pairs, **connection):
@@ -187,7 +201,8 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         table_name = table 
     else:
         table_name = table.name
-        schema = schema or table.schema
+        schema = table.schema
+    schema = schema or _schema()
     if doc is True:
         doc = _doc
     meta = MetaData()
@@ -218,6 +233,8 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         nullables = [Column(k.lower(), _types.get(t, t)) for k, t in nullable.items() if k not in col_names] 
         docs = [Column(doc, String, nullable = True)] if doc is not None else []
         cols = cols + non_nulls + nullables + docs
+        if len(cols) == 0:
+            raise ValueError('You seem to be trying to create a table with no columns? Perhaps you are trying to point to an existing table and getting its name wrong?')
         tbl = Table(table_name, meta, *cols)
         meta.create_all(e)
     else:
@@ -614,6 +631,14 @@ class sql_cursor(object):
         """
         return ulist(sorted(set(as_list(self.pk))))
 
+    @property
+    def reset(self):
+        res = self.copy()
+        res.spec = None
+        res.selection = None
+        res.order = None
+        return res
+
     def find(self, *args, **kwargs):
         """
         This returns a table with additional filtering. note that you can build it iteratively
@@ -635,11 +660,10 @@ class sql_cursor(object):
         ---------
         >>> t.inc(name = 'yoav').exc(t.c.age > 30) ## all the yoavs aged 30 or less        
         """
-        res = self.copy()
         if len(args) == 0 and len(kwargs) == 0:
-            res.spec = None
-            return res
-        elif len(kwargs) > 0 and len(args) == 0:
+            return self
+        res = self.copy()
+        if len(kwargs) > 0 and len(args) == 0:
             e = self._c(kwargs)
         elif len(args) > 0 and len(kwargs) == 0:
             e = self._c(args)
@@ -724,9 +748,11 @@ class sql_cursor(object):
     def columns(self):
         return ulist([col.name for col in self.table.columns])
 
-    def select(self, value = None):
+    def select(self, *value):
+        if len(value) == 0:
+            return self
         res = self.copy()
-        res.selection = value
+        res.selection = as_list(value)
         return res
     
     def _enrich(self, doc, columns = None):

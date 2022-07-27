@@ -124,7 +124,15 @@ def get_engine(*pairs, **connection):
         e = sa.create_engine(cstr)       
     return e
     
-_types = {str: String, int : Integer, float: Float, datetime.date: DATE, datetime.datetime : DATETIME, datetime.time: TIME}
+_types = {str: String, 'str' : String, 
+          int : Integer, 'int' : Integer,
+          float: Float, 
+          'dec' : sa.DECIMAL(0), 'dec1' : sa.DECIMAL(1), 'dec2' : sa.DECIMAL(2), 'dec3' : sa.DECIMAL(3), 'dec4' : sa.DECIMAL(4), 'dec5' : sa.DECIMAL(5), 
+          datetime.date: DATE, 'date' : DATE,
+          datetime.datetime : DATETIME, 'datetime' : DATETIME,
+          datetime.time: TIME, 'time' : TIME,
+          bin : sa.VARBINARY}
+
 _orders = {1 : asc, True: asc, 'asc': asc, asc : asc, -1: desc, False: desc, 'desc': desc, desc: desc}
 
 
@@ -231,7 +239,7 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         col_names = [col.name for col in cols]
         non_nulls = [Column(k, _types.get(t, t), nullable = False) for k, t in pks.items() if k not in col_names]
         nullables = [Column(k.lower(), _types.get(t, t)) for k, t in nullable.items() if k not in col_names] 
-        docs = [Column(doc, String, nullable = True)] if doc is not None else []
+        docs = [Column(doc, String, nullable = True)] if doc else []
         cols = cols + non_nulls + nullables + docs
         if len(cols) == 0:
             raise ValueError('You seem to be trying to create a table with no columns? Perhaps you are trying to point to an existing table and getting its name wrong?')
@@ -840,7 +848,7 @@ class sql_cursor(object):
         
         columns = columns or self.columns
         edoc = self._enrich(doc, columns)
-        if self.doc is None or isinstance(edoc.get(self.doc), dict):
+        if self.doc is None or self.doc is False or isinstance(edoc.get(self.doc), dict):
             return edoc
         else:
             edoc = {key: value for key, value in edoc.items() if key in columns}
@@ -880,7 +888,7 @@ class sql_cursor(object):
         """
         converts a document which is of the format {self.doc : doc} into a regular looking document
         """
-        if self.doc is None or not isinstance(doc.get(self.doc), dict):
+        if self.doc is None or self.doc is False or not isinstance(doc.get(self.doc), dict):
             return Dict(doc) if type(doc) == dict else doc
         res = doc[self.doc]
         columns = columns or self.columns

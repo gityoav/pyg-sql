@@ -102,6 +102,17 @@ def get_cstr(*pairs, **connection):
         params = '&'.join('%s=%s'%(k,v) for k,v in connection.items())
         return 'mssql+pyodbc://%(server)s/%(db)s%(params)s'%dict(server=server, db = db, params = '?' +params if params else '')
 
+def create_schema(engine, schema):
+    if schema is None:
+        return
+    try:
+        if schema not in engine.dialect.get_schema_names(engine):
+            engine.execute(sa.schema.CreateSchema(schema))
+    except AttributeError: #MS SQL vs POSTGRES
+        if not engine.dialect.has_schema(engine, schema):
+            engine.execute(sa.schema.CreateSchema(schema))
+    return schema
+    
 def get_engine(*pairs, **connection):    
     """
     returns a sqlalchemy engine object
@@ -134,6 +145,7 @@ _types = {str: String, 'str' : String,
           bin : sa.VARBINARY}
 
 _orders = {1 : asc, True: asc, 'asc': asc, asc : asc, -1: desc, False: desc, 'desc': desc, desc: desc}
+
 
 
 def sql_table(table, db = None, non_null = None, nullable = None, _id = None, schema = None, server = None, reader = None, writer = None, pk = None, doc = None, mode = None):
@@ -210,7 +222,7 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
     else:
         table_name = table.name
         schema = table.schema
-    schema = schema or _schema()
+    schema = create_schema(e, schema or _schema())
     if doc is True:
         doc = _doc
     meta = MetaData()
@@ -243,7 +255,7 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         cols = cols + non_nulls + nullables + docs
         if len(cols) == 0:
             raise ValueError('You seem to be trying to create a table with no columns? Perhaps you are trying to point to an existing table and getting its name wrong?')
-        tbl = Table(table_name, meta, *cols)
+        tbl = Table(table_name, meta, *cols, schema = schema)
         meta.create_all(e)
     else:
         tbl = Table(table_name, meta, autoload_with = e, schema = schema)

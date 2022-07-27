@@ -80,6 +80,35 @@ _sql_loads = encode(sql_loads)
 def sql_encode(value, path):
     """
     encodes a single DataFrame or a document containing dataframes into a an abject of multiple pickled files that can be decoded
+
+    Parameters:
+    ----------
+    value : document or dataframe
+        value to be encoded inside a sql database
+        
+    path : str
+        a sqlalchemy-like string
+        
+    Example: writing a single dataframe
+    --------
+    >>> from pyg import * 
+    >>> value = pd.Series([1,2])
+    >>> path = 'mssql+pyodbc://localhost/database_here?doc=false/xyz.table_name/root_of_doc'
+    >>> res = sql_encode(value, path)
+    >>> table = sql_table(db = 'database_here', schema = 'xyz', table = 'table_name')
+    >>> assert len(table.inc(key = 'root_of_doc'))>0
+    >>> sql_loads(path)
+    
+    Example: writing a document
+    ---------------------------
+    >>> from pyg import * 
+    >>> value = dict(a = pd.Series([1,2]), b = pd.Series([3,4]))
+    >>> path = 'mssql+pyodbc://localhost/database_here?doc=false/xyz.table_name/root_of_doc'
+    >>> res = sql_encode(value, path)
+    >>> table = sql_table(db = 'database_here', schema = 'xyz', table = 'table_name')
+    >>> keys = table.distinct('key')
+    >>> assert 'root_of_doc/a' in keys and 'root_of_doc/b' in keys    
+    >>> assert eq(value['a'],sql_loads(path+'/a'))
     """
     if path.endswith(_sql):
         path = path[:-len(_sql)]
@@ -87,7 +116,7 @@ def sql_encode(value, path):
         path = path[:-1]
     if is_pd(value) or is_arr(value):
         path = root_path_check(path)
-        return dict(_obj = _sql_loads, path = sql_dumps(value, path + _sql))       
+        return dict(_obj = _sql_loads, path = sql_dumps(value, path))       
     elif is_dict(value):
         res = type(value)(**{k : sql_encode(v, '%s/%s'%(path,k)) for k, v in value.items()})
         if isinstance(value, dictable):

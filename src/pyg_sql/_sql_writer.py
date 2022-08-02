@@ -1,5 +1,5 @@
-from pyg_base import cache, Dict, is_pd, is_arr, is_dict, dictable
-from pyg_sql._sql_table import sql_table, _pairs2connection
+from pyg_base import cache, Dict, is_pd, is_arr, is_dict, dictable, cfg_read
+from pyg_sql._sql_table import sql_table, _pairs2connection, _schema, _database, get_server
 from pyg_encoders import encode, cell_root, root_path, root_path_check, dictable_decoded, WRITERS
 import pandas as pd
 import pickle
@@ -11,56 +11,83 @@ _dictable_decoded = encode(dictable_decoded)
 _key = 'key'
 _data = 'data'
 
-def path_to_connection(path):
-    u, p = path.split('//')
-    ps = p.split('/')
-    server = ps[0]
-    params = ps[1]
-    db, prm = params.split('?')
-    connections = _pairs2connection(*prm.split('&'))
+def sql_binary_store(path):
+    """
+    splits a path which resembles a sql-alchemy connection string, to its bits
+
+    Parameters
+    ----------
+    path : str
+        A string of the format:
+        path = 'server/database/schema?doc=true&name=yoav/table?whatever=1/root/path.sql'
+
+    You may leave "blank" and then we will default.. so e.g.:
+        '/database//table/root.sql' is perfectly acceptable and will default to default server and schema
+
+    Returns
+    -------
+    dict
+        various connection parameters. specifically, the cursor parameter actually generates the table
+    """
+    params = []
+    ps = path.split('/')
+    if len(ps) < 5:
+        raise ValueError('%s must have at least five items: server/database/schema/table/root'%path)
+    for i in range(len(ps)):
+        if '?' in ps[i]:
+            ps[i], prm = ps[i].split('?')
+            params.extend(prm.split('&'))            
+    connections = _pairs2connection(*params)
+    server, db, schema, table = ps[:4]
+    root = '/'.join(ps[4:])
+    server = get_server(server or connections.pop('server',None))
+    db = _database(db or connections.pop('db',None))
+    schema = _schema(schema or connections.pop('schema', None))
     doc = connections.pop('doc', 'true')
     doc = dict(true = True, false = False).get(doc.lower(), doc)        
-    url = '%s//%s/%s'%(u, server, params)
-    table = ps[2].split('/')[0]
-    root = '/'.join(ps[3:])
-    if '.' in table:
-        schema, table = table.split('.')
-    else:
-        schema = None
-    schema = connections.pop('schema', schema)
     cursor = sql_table(table = table, db = db, schema = schema, pk = _key, 
                         non_null = {_data : bin}, doc = doc)
-    connections.update(dict(url = url, server = server, schema  = schema, cursor = cursor, root = root, table = table))
+    connections.update(dict(cursor = cursor, path = '%s/%s/%s/%s/%s'%(server, db, schema, table, root),
+                            server = server, schema = schema, db = db, table = table, root = root ))
     return Dict(connections)
 
 
 def sql_dumps(obj, path):
     """
-    path = 'mssql+pyodbc://localhost/test_db?driver=ODBC+Driver+17+for+SQL+Server&schema=xyz'
+    :Example
+    --------
+    >>> from pyg import *
+    >>> path = '/test_db//test_table/key'
+    >>> self = sql_binary_store(path).cursor
+    >>> self.deleted
+    >>> obj = pd.Series([1,2,3])
+    >>> sql_dumps(obj, path)
+    >>> sql_loads(path)
 
     Parameters
     ----------
-    df : TYPE
-        DESCRIPTION.
-    path : TYPE
-        DESCRIPTION.
+    obj : object
+        item to be pickled into binary.
+    path : str
+        path sqlalchemy-like to save the pickled binary in.
 
     Returns
     -------
-    None.
+    string 
+        path
 
     """
-    res = path_to_connection(path)
+    res = sql_binary_store(path)
     data = pickle.dumps(obj)
     cursor = res.cursor
     root = res.root
     # print('dumping into...\n', cursor)
     cursor.update_one({_key : root, _data : data})
     # print(cursor)
-    return path
+    return res.path
 
 def sql_loads(path):
-    res = path_to_connection(path)
+    res = sql_binary_store(path)
     cursor = res.cursor
     root = res.root
     row = cursor.inc(**{_key :root})

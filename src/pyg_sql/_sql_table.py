@@ -1,17 +1,18 @@
 import sqlalchemy as sa
 from sqlalchemy_utils.functions import create_database
-from pyg_base import cache, cfg_read, as_list, dictable, Dict, is_dict, is_dictable, is_strs, is_str, is_int, is_date, dt2str, ulist, try_back, unique
+from pyg_base import cache, cfg_read, as_list, dictable, replace, Dict, is_dict, is_dictable, is_strs, is_str, is_int, is_date, dt2str, ulist, try_back, unique
 from pyg_encoders import as_reader, as_writer, dumps, loads
 from sqlalchemy import Table, Column, Integer, String, MetaData, Identity, Float, DATE, DATETIME, TIME, select, func, not_, desc, asc
 from sqlalchemy.orm import Session
 import datetime
 from copy import copy
+from pyg_base import logger
 
 _id = '_id'
 _doc = 'doc'
 _root = 'root'
 _deleted = 'deleted'
-
+_archived = 'archived_'
 
 @cache
 def _servers():
@@ -23,12 +24,12 @@ def _servers():
     return res
 
 @cache
-def _schema():
-    return cfg_read().get('sql_schema', None)
+def _schema(schema = None):
+    return schema or cfg_read().get('sql_schema', 'dbo')
 
 @cache
-def _database():
-    return cfg_read().get('sql_database', 'master')
+def _database(db = None):
+    return db or cfg_read().get('sql_database', 'master')
 
     
 def get_server(server = None):
@@ -38,6 +39,7 @@ def get_server(server = None):
         config['sql_server'] = dict(dev = 'server.test', prod = 'prod.server')
     """
     servers = _servers()
+    server = server or None
     if isinstance(servers, str):
         if server is None or server is True:
             server = servers
@@ -75,17 +77,18 @@ def _pairs2connection(*pairs, **connection):
     for pair in pairs:
         ps = pair.split(';')
         for p in ps:
-            k, v = p.split('=')
-            k = k.strip()
-            v = v.strip().replace("'","")
-            connection[k] = v
-    connection = {k.lower() : v.replace(' ','+').replace('{','').replace('}','') for k, v in connection.items() if v is not None}
+            if p:
+                k, v = p.split('=')
+                k = k.strip()
+                v = v.strip().replace("'","")
+                connection[k] = v
+    connection = {k.lower() : replace(replace(v, ' ','+'),['{','}'],'') for k, v in connection.items() if v is not None}
     return connection
 
 def _db(connection):
     db = connection.pop('db', None)
     if db is None:
-        db = connection.pop('database', _database())
+        db = _database(connection.pop('database', None))
     return db
     
 def get_cstr(*pairs, **connection):
@@ -108,9 +111,11 @@ def create_schema(engine, schema):
     try:
         if schema not in engine.dialect.get_schema_names(engine):
             engine.execute(sa.schema.CreateSchema(schema))
+            logger.info('creating schema: %s'%schema)
     except AttributeError: #MS SQL vs POSTGRES
         if not engine.dialect.has_schema(engine, schema):
             engine.execute(sa.schema.CreateSchema(schema))
+            logger.info('creating schema: %s'%schema)
     return schema
     
 def get_engine(*pairs, **connection):    
@@ -130,7 +135,7 @@ def get_engine(*pairs, **connection):
     try:
         sa.inspect(e)
     except Exception:
-        print('creating db... ', db)
+        logger.info('creating database: %s'%db)
         create_database(cstr)
         e = sa.create_engine(cstr)       
     return e
@@ -145,8 +150,6 @@ _types = {str: String, 'str' : String,
           bin : sa.VARBINARY}
 
 _orders = {1 : asc, True: asc, 'asc': asc, asc : asc, -1: desc, False: desc, 'desc': desc, desc: desc}
-
-
 
 def sql_table(table, db = None, non_null = None, nullable = None, _id = None, schema = None, server = None, reader = None, writer = None, pk = None, doc = None, mode = None):
     """
@@ -193,13 +196,13 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
     if isinstance(table, str):
         values = table.split('.')
         if len(values) == 2:
-            db = db or values[0]
-            if db != values[0]:
-                raise ValueError('db cannot be both %s and %s'%(values[0], db))
+            schema = schema or values[0]
+            if schema != values[0]:
+                raise ValueError('schema cannot be both %s and %s'%(values[0], db))
             table = values[1]
         elif len(values)>2:
             raise ValueError('not sure how to translate this %s into a db.table format'%table)
-    e = get_engine(server = server, db = db)
+    e = get_engine(server = server, db = db, schema = schema)
     
     non_null = non_null or {}
     nullable = nullable or {}
@@ -221,8 +224,9 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         table_name = table 
     else:
         table_name = table.name
-        schema = table.schema
-    schema = create_schema(e, schema or _schema())
+        if schema is None:
+            schema = table.schema
+    schema = create_schema(e, _schema(schema))
     if doc is True:
         doc = _doc
     meta = MetaData()
@@ -255,9 +259,11 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         cols = cols + non_nulls + nullables + docs
         if len(cols) == 0:
             raise ValueError('You seem to be trying to create a table with no columns? Perhaps you are trying to point to an existing table and getting its name wrong?')
+        logger.info('creating table: %s.%s.%s%s'%(db, schema, table_name, [col.name for col in cols]))
         tbl = Table(table_name, meta, *cols, schema = schema)
         meta.create_all(e)
     else:
+        # logger.info('schema :%s'%schema)
         tbl = Table(table_name, meta, autoload_with = e, schema = schema)
         cols = tbl.columns
         non_nulls = [Column(k, _types.get(t, t), nullable = False) for k, t in pks.items()]
@@ -713,7 +719,15 @@ class sql_cursor(object):
             return self.select(ulist(as_list(self.selection)) - other)
         else:
             raise ValueError('cannot subtract these columns while the selection is non empty, use self.select() to reset selection')
-                
+    
+    def drop(self):
+        logger.info('dropping table: %s.%s.%s'%(self.db, 
+                                                  self.schema, 
+                                                  self.table.name))
+
+        self.table.drop(bind = self.engine)
+
+    
     def exc(self, *args, **kwargs):
         """
         Exclude: This returns a table with additional filtering OPPOSITE TO inc. note that you can build it iteratively
@@ -967,10 +981,22 @@ class sql_cursor(object):
         else:        
             return self._read_row(rows, reader = reader, columns = columns, load = load)
 
-    def docs(self, start = None, stop = None, step = None):
+    def docs(self, start = None, stop = None, step = None, reader = None):
         rows = self._read_statement(start = start, stop = stop, step = step)
-        docs = self._rows_to_docs(rows)
+        docs = self._rows_to_docs(rows, reader = reader)
         return dictable(docs)
+    
+    def read(self, item = 0, reader = None):
+        value = len(self) + item if item < 0 else item
+        statement = self.statement()
+        if self.order is None:
+            row = list(self.engine.connect().execute(statement.limit(value+1)))[value]
+        else:
+            row = list(self.engine.connect().execute(statement.offset(value).limit(1)))[0]
+        doc = self._rows_to_docs(row, reader = reader)
+        rtn = self._undock(doc)
+        return rtn
+
                 
     def __getitem__(self, value):
         """
@@ -1000,22 +1026,19 @@ class sql_cursor(object):
 
         elif isinstance(value, slice):
             start, stop, step = value.start, value.stop, value.step
+            if step is False:
+                step = None
+                reader = False
+            else:
+                reader = None
             rows = self._read_statement(start = start, stop = stop, step = step)
-            docs = self._rows_to_docs(rows)
+            docs = self._rows_to_docs(rows, reader = reader)
             columns = self.columns
             res = dictable([self._undock(doc, columns = columns) for doc in docs])
             return res
 
         elif is_int(value):
-            value = len(self) + value if value < 0 else value
-            statement = self.statement()
-            if self.order is None:
-                row = list(self.engine.connect().execute(statement.limit(value+1)))[value]
-            else:
-                row = list(self.engine.connect().execute(statement.offset(value).limit(1)))[0]
-            doc = self._rows_to_docs(row)
-            rtn = self._undock(doc)
-            return rtn
+            return self.read(value)
     
     def update_one(self, doc, upsert = True):
         """
@@ -1203,7 +1226,7 @@ class sql_cursor(object):
                 self.deleted.insert_many(docs, write = False)
             res.full_delete()
         return self
-        
+
     def sort(self, order = None):
         if not order:
             return self
@@ -1250,21 +1273,22 @@ class sql_cursor(object):
         return res
 
     def _is_deleted(self):
-        return self.db.startswith('deleted_')
+        return is_str(self.schema) and self.schema.startswith(_archived)
 
     @property
     def deleted(self):
         if self._is_deleted():
             return self
         else:        
-            db_name = 'deleted_' + self.db
-            res = sql_table(table = self.table, db = db_name, non_null = dict(deleted = datetime.datetime), 
+            schema = _archived + (self.schema or '')
+            # logger.info('archived schema: %s'%schema)
+            res = sql_table(table = self.table, db = self.db, non_null = dict(deleted = datetime.datetime), 
                             server = self.server, 
                             pk = self.pk, 
                             doc = self.doc, 
                             writer = self.writer, 
                             reader = self.reader, 
-                            schema = self.schema)
+                            schema = schema)
             res.spec = self.spec
             res.order = self.order
             res.selection = self.selection
@@ -1279,6 +1303,6 @@ class sql_cursor(object):
             A unique combination of the server address, db name and table name, identifying the table uniquely. This allows us to create an in-memory representation of the data in pyg-cell
 
         """
-        return ('server', self.server or get_server()), ('db', self.db), ('table', self.table.name)
+        return ('server', self.server or get_server()), ('db', self.db), ('schema', self.schema), ('table', self.table.name)
 
 

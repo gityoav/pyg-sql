@@ -1,13 +1,13 @@
 from pyg_base import cache, Dict, is_pd, is_arr, is_dict, dictable, cfg_read
 from pyg_sql._sql_table import sql_table, _pairs2connection, _schema, _database, get_server
-from pyg_encoders import encode, cell_root, root_path, root_path_check, dictable_decoded, WRITERS
+from pyg_encoders import encode, cell_root, root_path, root_path_check, dictable_decode, WRITERS
 import pandas as pd
 import pickle
 
 sql_table_ = cache(sql_table)
 _sql = '.sql'
 _dictable = '.dictable'
-_dictable_decoded = encode(dictable_decoded)
+_dictable_decode = encode(dictable_decode)
 _key = 'key'
 _data = 'data'
 
@@ -101,7 +101,7 @@ def sql_loads(path):
         data = row[0][_data]
         obj = pickle.loads(data)
         return obj
-    
+
 _sql_loads = encode(sql_loads)
 
 def sql_encode(value, path):
@@ -148,8 +148,9 @@ def sql_encode(value, path):
         res = type(value)(**{k : sql_encode(v, '%s/%s'%(path,k)) for k, v in value.items()})
         if isinstance(value, dictable):
             df = pd.DataFrame(res)
-            return dict(_obj = _dictable_decoded, 
-                        path =  sql_dumps(df, path + _dictable))
+            return dict(_obj = _dictable_decode, 
+                        df =  sql_dumps(df, path if path.endswith(_dictable) else path + _dictable),
+                        loader = _sql_loads)
         return res
     elif isinstance(value, (list, tuple)):
         return type(value)([sql_encode(v, '%s/%i'%(path,i)) for i, v in enumerate(value)])

@@ -1261,12 +1261,13 @@ class sql_cursor(object):
     def __repr__(self):
         statement = self.statement()
         params = statement.compile().params
-        text = str(statement).replace(self.table.name+'.','')
+        prefix = '%s.%s'%(self.schema, self.table.name) if self.schema else self.table.name
+        text = str(statement).replace(prefix + '.','')
         for k,v in params.items():
             text = text.replace(':'+k, '"%s"'%v if is_str(v) else dt2str(v) if is_date(v) else str(v))
             
-        res = 'sql_cursor: %(db)s.%(table)s%(pk)s %(doc)s %(w)s\n%(statement)s\n%(n)i records'%dict(db = self.db, table = self.table.name, doc = 'DOCSTORE[%s]'%self.doc if self.doc else '', 
-                                                                                              w = 'writer = %s'%self.writer if is_str(self.writer) else '',
+        res = 'sql_cursor: %(db)s.%(table)s%(pk)s %(doc)s %(w)s\n%(statement)s\n%(n)i records'%dict(db = self.db, table = prefix, doc = 'DOCSTORE[%s]'%self.doc if self.doc else '', 
+                                                                                              w = '\nwriter: %s\n'%self.writer if is_str(self.writer) else '',
                                                                                               pk = self._pk if self._pk else '', 
                                                                                               n = len(self), 
                                                                                               statement = text)

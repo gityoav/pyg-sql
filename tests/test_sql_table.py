@@ -71,7 +71,7 @@ def test_writable_doc_store_save_and_read():
         saved = t.inc(key = doc.key)[0]
         assert eq(saved.data, doc.data)
 
-    ## access of stored data directly...
+    ## access of binary stored data directly...
     store = sql_binary_store('/test_db/test/test_data/%key.sql').cursor
     assert 'dictable2/data/a/1' in store.distinct('key')
     stored = store.inc(key = 'dictable/data.dictable')[0]
@@ -80,5 +80,17 @@ def test_writable_doc_store_save_and_read():
     stored = store.inc(key = 'dictable2/data/a/1')[0]
     assert eq(pickle.loads(stored['data']), 2*df)
 
+    ## acess of archived data directly
+    
+    key = docs[0].key
+    assert len(t.deleted.inc(key = key))>1
+    doc = t.deleted.inc(key = key)[0]
+    eq(doc - 'deleted', docs[0])
+
+sql_table('test_table', server = True, db = 'test_db', schema = 'archived_test')[0]['doc']
+
+t.deleted.reset
+doc.data
+docs[0].data
     t.deleted.drop()
     t.drop()

@@ -273,7 +273,9 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
                     raise ValueError('column %s does not exist in %s.%s'%(key, db, table_name))
                 elif cols[key.name].nullable is True:
                     raise ValueError('WARNING: You defined %s as a primary but it is nullable in %s.%s'%(key, db, table_name))
-    res = sql_cursor(table = tbl, db = db, server = server, engine = e, spec = None, selection = None, reader = reader, writer = writer, pk = pk, doc = doc)
+    res = sql_cursor(table = tbl, schema = schema, db = db, server = server, engine = e, 
+                     spec = None, selection = None, reader = reader, writer = writer, 
+                     pk = pk, doc = doc)
     return res
 
 class sql_cursor(object):

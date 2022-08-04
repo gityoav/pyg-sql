@@ -488,7 +488,7 @@ class sql_cursor(object):
     >>> assert list(read_from_db.salary.values) == [100, 200, 300]
     >>> assert list(read_from_file.values) == [100, 200, 300]
     """
-    def __init__(self, table, db = None, engine = None, server = None, spec = None, selection = None, order = None, reader = None, writer = None, pk = None, doc = None, **_):
+    def __init__(self, table, schema = None, db = None, engine = None, server = None, spec = None, selection = None, order = None, reader = None, writer = None, pk = None, doc = None, **_):
         """
         Parameters
         ----------
@@ -496,6 +496,8 @@ class sql_cursor(object):
             Our table
         db : string, optional
             Name of the db where table is.
+        schema : string, optional
+            Name of the db schema for table.
         engine : sa,Engine, optional
             The sqlalchemy engine
         server : str , optional
@@ -515,7 +517,7 @@ class sql_cursor(object):
             
         """
         if is_str(table):
-            table = sql_table(table = table, db = db, server = server)
+            table = sql_table(table = table, schema = schema, db = db, server = server)
             
         if isinstance(table, sql_cursor):
             db = table.db if db is None else db
@@ -523,6 +525,7 @@ class sql_cursor(object):
             server = table.server if server is None else server
             spec = table.spec if spec is None else spec
             selection = table.selection if selection is None else selection
+            schema = table.schema if schema is None else schema
             order = table.order if order is None else order
             reader = table.reader if reader is None else reader
             writer = table.writer if writer is None else writer
@@ -531,6 +534,7 @@ class sql_cursor(object):
             table = table.table
     
         self.table = table
+        self.schema = schema
         self.db = db
         self.server = get_server(server)
         self.engine = engine or get_engine(db = self.db, server = self.server)
@@ -544,13 +548,7 @@ class sql_cursor(object):
     
     def copy(self):
         return type(self)(self)
-    
-    @property
-    def schema(self):
-        """
-        table schema
-        """
-        return self.table.schema        
+
     
     @property
     def _ids(self):
@@ -1283,7 +1281,9 @@ class sql_cursor(object):
         else:        
             schema = _archived + (self.schema or '')
             # logger.info('archived schema: %s'%schema)
-            res = sql_table(table = self.table, db = self.db, non_null = dict(deleted = datetime.datetime), 
+            res = sql_table(table = self.table.name, 
+                            db = self.db, 
+                            non_null = dict(deleted = datetime.datetime), 
                             server = self.server, 
                             pk = self.pk, 
                             doc = self.doc, 

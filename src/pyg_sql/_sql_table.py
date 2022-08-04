@@ -1281,7 +1281,7 @@ class sql_cursor(object):
         else:        
             schema = _archived + (self.schema or '')
             # logger.info('archived schema: %s'%schema)
-            res = sql_table(table = self.table.name, 
+            res = sql_table(table = self.table, 
                             db = self.db, 
                             non_null = dict(deleted = datetime.datetime), 
                             server = self.server, 

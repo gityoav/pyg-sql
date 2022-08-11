@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 import datetime
 from copy import copy
 from pyg_base import logger
+from functools import partial
 
 _id = '_id'
 _doc = 'doc'
@@ -202,6 +203,15 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
             table = values[1]
         elif len(values)>2:
             raise ValueError('not sure how to translate this %s into a db.table format'%table)
+    elif isinstance(table, partial): # support for using the partial rather than the actual table
+        db = table.keywords.get('db') if db is None else db
+        schema = table.keywords.get('schema') if schema is None else schema
+        server = table.keywords.get('server') if server is None else server
+        pk = table.keywords.get('pk') if pk is None else pk
+        writer = table.keywords.get('writer') if writer is None else writer
+        doc = table.keywords.get('doc') if doc is None else doc
+        table = table.keywords['table']
+        
     e = get_engine(server = server, db = db, schema = schema)
     
     non_null = non_null or {}
@@ -263,16 +273,17 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         tbl = Table(table_name, meta, *cols, schema = schema)
         meta.create_all(e)
     else:
+        pass
         # logger.info('schema :%s'%schema)
         tbl = Table(table_name, meta, autoload_with = e, schema = schema)
-        cols = tbl.columns
-        non_nulls = [Column(k, _types.get(t, t), nullable = False) for k, t in pks.items()]
-        if non_nulls is not None:
-            for key in non_nulls:
-                if key.name not in cols.keys():
-                    raise ValueError('column %s does not exist in %s.%s'%(key, db, table_name))
-                elif cols[key.name].nullable is True:
-                    raise ValueError('WARNING: You defined %s as a primary but it is nullable in %s.%s'%(key, db, table_name))
+        # cols = tbl.columns
+        # non_nulls = [Column(k, _types.get(t, t), nullable = False) for k, t in pks.items()]
+        # if non_nulls is not None:
+        #     for key in non_nulls:
+        #         if key.name not in cols.keys():
+        #             raise ValueError('column %s does not exist in %s.%s'%(key, db, table_name))
+        #         elif cols[key.name].nullable is True:
+        #             raise ValueError('WARNING: You defined %s as a primary but it is nullable in %s.%s'%(key, db, table_name))
     res = sql_cursor(table = tbl, schema = schema, db = db, server = server, engine = e, 
                      spec = None, selection = None, reader = reader, writer = writer, 
                      pk = pk, doc = doc)

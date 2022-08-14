@@ -118,13 +118,9 @@ def create_schema(engine, schema):
             engine.execute(sa.schema.CreateSchema(schema))
             logger.info('creating schema: %s'%schema)
     return schema
-    
-def get_engine(*pairs, **connection):    
-    """
-    returns a sqlalchemy engine object
-    accepts either *pairs: 'driver={ODBC Driver 17 for SQL Server}'
-    or keyword arguments that look like driver = 'ODBC Driver 17 for SQL Server'    
-    """
+
+@cache
+def _get_engine(*pairs, **connection):    
     connection = _pairs2connection(*pairs, **connection)
     server = get_server(connection.pop('server', None))
     connection['driver'] = get_driver(connection.pop('driver', None))
@@ -140,6 +136,14 @@ def get_engine(*pairs, **connection):
         create_database(cstr)
         e = sa.create_engine(cstr)       
     return e
+
+def get_engine(*pairs, **connection):
+    """
+    returns a sqlalchemy engine object
+    accepts either *pairs: 'driver={ODBC Driver 17 for SQL Server}'
+    or keyword arguments that look like driver = 'ODBC Driver 17 for SQL Server'    
+    """
+    return _get_engine(*pairs, **connection)
     
 _types = {str: String, 'str' : String, 
           int : Integer, 'int' : Integer,
@@ -151,6 +155,12 @@ _types = {str: String, 'str' : String,
           bin : sa.VARBINARY}
 
 _orders = {1 : asc, True: asc, 'asc': asc, asc : asc, -1: desc, False: desc, 'desc': desc, desc: desc}
+
+@cache
+def _get_table(table_name, schema, db, server):
+    e = _get_engine(server = server, db = db, schema = schema)
+    meta = MetaData()
+    return Table(table_name, meta, autoload_with = e, schema = schema)
 
 def sql_table(table, db = None, non_null = None, nullable = None, _id = None, schema = None, server = None, reader = None, writer = None, pk = None, doc = None, mode = None):
     """
@@ -212,7 +222,7 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         doc = table.keywords.get('doc') if doc is None else doc
         table = table.keywords['table']
         
-    e = get_engine(server = server, db = db, schema = schema)
+    e = _get_engine(server = server, db = db, schema = schema)
     
     non_null = non_null or {}
     nullable = nullable or {}
@@ -239,9 +249,12 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
     schema = create_schema(e, _schema(schema))
     if doc is True:
         doc = _doc
-    meta = MetaData()
-    i = sa.inspect(e)
-    if not i.has_table(table_name, schema = schema):
+    try:
+        tbl = _get_table(table_name, schema, db, server) ## by default we grab the existing table
+    except sa.exc.NoSuchTableError:        
+        meta = MetaData()
+        # i = sa.inspect(e)
+        # if not i.has_table(table_name, schema = schema):
         cols = []
         if isinstance(table, sa.sql.schema.Table):
             for col in table.columns:
@@ -272,10 +285,10 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         logger.info('creating table: %s.%s.%s%s'%(db, schema, table_name, [col.name for col in cols]))
         tbl = Table(table_name, meta, *cols, schema = schema)
         meta.create_all(e)
-    else:
-        pass
-        # logger.info('schema :%s'%schema)
-        tbl = Table(table_name, meta, autoload_with = e, schema = schema)
+    # else:
+    #     pass
+    #     # logger.info('schema :%s'%schema)
+    #     tbl = Table(table_name, meta, autoload_with = e, schema = schema)
         # cols = tbl.columns
         # non_nulls = [Column(k, _types.get(t, t), nullable = False) for k, t in pks.items()]
         # if non_nulls is not None:

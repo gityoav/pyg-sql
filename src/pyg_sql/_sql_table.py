@@ -203,6 +203,13 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
     res : sql_cursor
         A hybrid object we love.
 
+
+    Example:
+    --------
+    
+    table = sql_table(table = 'test', pk = 'key', doc = True, schema ='dbo', db = 'db')
+    tbl = _get_table(table_name, schema, db, server)
+        
     """
     if isinstance(table, str):
         values = table.split('.')
@@ -247,11 +254,15 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         if schema is None:
             schema = table.schema
     schema = create_schema(e, _schema(schema))
-    if doc is True:
-        doc = _doc
     try:
         tbl = _get_table(table_name, schema, db, server) ## by default we grab the existing table
+        if doc is None and _doc in [col.name for col in tbl.columns]:
+            doc = _doc
     except sa.exc.NoSuchTableError:        
+        if doc is True: #user wants a doc
+            doc = _doc
+        elif len(non_null) == 0 and len(nullable) == 0: #user specified nothing but pk so assume table should contain SOMETHING :-)
+            doc = _doc
         meta = MetaData()
         # i = sa.inspect(e)
         # if not i.has_table(table_name, schema = schema):
@@ -285,18 +296,6 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         logger.info('creating table: %s.%s.%s%s'%(db, schema, table_name, [col.name for col in cols]))
         tbl = Table(table_name, meta, *cols, schema = schema)
         meta.create_all(e)
-    # else:
-    #     pass
-    #     # logger.info('schema :%s'%schema)
-    #     tbl = Table(table_name, meta, autoload_with = e, schema = schema)
-        # cols = tbl.columns
-        # non_nulls = [Column(k, _types.get(t, t), nullable = False) for k, t in pks.items()]
-        # if non_nulls is not None:
-        #     for key in non_nulls:
-        #         if key.name not in cols.keys():
-        #             raise ValueError('column %s does not exist in %s.%s'%(key, db, table_name))
-        #         elif cols[key.name].nullable is True:
-        #             raise ValueError('WARNING: You defined %s as a primary but it is nullable in %s.%s'%(key, db, table_name))
     res = sql_cursor(table = tbl, schema = schema, db = db, server = server, engine = e, 
                      spec = None, selection = None, reader = reader, writer = writer, 
                      pk = pk, doc = doc)

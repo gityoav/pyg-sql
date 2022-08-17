@@ -204,11 +204,27 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         A hybrid object we love.
 
 
-    Example:
-    --------
+    Example: simple table creation
+    ---------
+    >>> table = sql_table(table = 'test', nullable = dict(a = int, b = str), db = 'db')
+    >>> table.insert(dict(a = 1, b = 'a'))
+    >>> assert len(table) == 1
+    >>> table.insert(dictable(a = [2,3], b = 'b'))
+    >>> assert len(table) == 3
+    >>> assert len(table.inc(table.c.a > 2)) == 1
+    >>> assert table.inc(table.c.a > 2)[0] == dict(a = 3, b = 'b')
+    >>> table.inc(b = 'a').delete()
+    >>> assert len(table) == 2
+    >>> assert table.distinct('b') == ['b']
+    >>> table.drop()
     
-    table = sql_table(table = 'test', pk = 'key', doc = True, schema ='dbo', db = 'db')
-    tbl = _get_table(table_name, schema, db, server)
+    Example: ensure sql_table defaults for a doc store if 'doc' exists in existing table or no data columns are specified on creation
+    --------
+    table = sql_table(table = 'test', pk = 'key', schema ='dbo', db = 'db')
+    assert table.doc == 'doc'
+    table = sql_table(table = 'test', db = 'db', schema = 'dbo')
+    assert tbl.doc == 'doc'
+    table.drop()
         
     """
     if isinstance(table, str):

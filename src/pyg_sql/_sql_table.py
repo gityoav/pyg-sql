@@ -270,14 +270,14 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         if schema is None:
             schema = table.schema
     schema = create_schema(e, _schema(schema))
+    if doc is True: #user wants a doc
+        doc = _doc
     try:
         tbl = _get_table(table_name, schema, db, server) ## by default we grab the existing table
         if doc is None and _doc in [col.name for col in tbl.columns]:
             doc = _doc
     except sa.exc.NoSuchTableError:        
-        if doc is True: #user wants a doc
-            doc = _doc
-        elif len(non_null) == 0 and len(nullable) == 0: #user specified nothing but pk so assume table should contain SOMETHING :-)
+        if doc is None and len(non_null) == 0 and len(nullable) == 0: #user specified nothing but pk so assume table should contain SOMETHING :-)
             doc = _doc
         meta = MetaData()
         # i = sa.inspect(e)

@@ -112,7 +112,8 @@ def _pairs2connection(*pairs, **connection):
 def _db(connection):
     db = connection.pop('db', None)
     if db is None:
-        db = _database(connection.pop('database', None))
+        db = connection.pop('database', None)
+    db = _database(db)
     return db
     
 def get_cstr(*pairs, **connection):
@@ -783,7 +784,7 @@ class sql_cursor(object):
             raise ValueError('cannot subtract these columns while the selection is non empty, use self.select() to reset selection')
     
     def drop(self):
-        logger.info('dropping table: %s.%s.%s'%(self.db, 
+        logger.info('dropping table: %s.%s.%s'%(_database(self.db), 
                                                   self.schema, 
                                                   self.table.name))
 
@@ -1328,7 +1329,8 @@ class sql_cursor(object):
         for k,v in params.items():
             text = text.replace(':'+k, '"%s"'%v if is_str(v) else dt2str(v) if is_date(v) else str(v))
             
-        res = 'sql_cursor: %(db)s.%(table)s%(pk)s %(doc)s %(w)s\n%(statement)s\n%(n)i records'%dict(db = self.db, table = prefix, doc = 'DOCSTORE[%s]'%self.doc if self.doc else '', 
+        res = 'sql_cursor: %(db)s.%(table)s%(pk)s %(doc)s %(w)s\n%(statement)s\n%(n)i records'%dict(db = _database(self.db), table = prefix, 
+                                                                                              doc = 'DOCSTORE[%s]'%self.doc if self.doc else '', 
                                                                                               w = '\nwriter: %s\n'%self.writer if is_str(self.writer) else '',
                                                                                               pk = self._pk if self._pk else '', 
                                                                                               n = len(self), 
@@ -1368,6 +1370,6 @@ class sql_cursor(object):
             A unique combination of the server address, db name and table name, identifying the table uniquely. This allows us to create an in-memory representation of the data in pyg-cell
 
         """
-        return ('server', self.server or get_server()), ('db', self.db), ('schema', self.schema), ('table', self.table.name)
+        return ('server', self.server), ('db', self.db), ('schema', self.schema), ('table', self.table.name)
 
 

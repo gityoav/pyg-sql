@@ -28,10 +28,33 @@ def _servers():
 def _schema(schema = None):
     return schema or cfg_read().get('sql_schema', 'dbo')
 
+
+@cache
+def _databases():
+    """
+    configures the sql_databases
+    from pyg import * 
+    
+    cfg = cfg_read()
+    cfg['sql_database'] = {None : 'db', 'res' : 'res'}
+    cfg_write(cfg)
+
+    """
+    dbs = cfg_read().get('sql_database', {None: 'master'})
+    if isinstance(dbs, str):
+        dbs = {dbs : dbs}
+    if None not in dbs:
+        dbs[None] = dbs.get('null')
+    dbs[True] = dbs.get('true')
+    dbs[False] = dbs.get('false')
+    return dbs
+
 @cache
 def _database(db = None):
-    return db or cfg_read().get('sql_database', 'master')
-
+    dbs = _databases()
+    db = dbs.get(db, db)
+    db = dbs.get(db, db)
+    return db
     
 def get_server(server = None):
     """

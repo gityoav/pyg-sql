@@ -8,6 +8,7 @@ import datetime
 from copy import copy
 from pyg_base import logger
 from functools import partial
+import pandas as pd
 
 _id = '_id'
 _doc = 'doc'
@@ -1023,15 +1024,44 @@ class sql_cursor(object):
         if (is_int(start) and start < 0) or (is_int(stop) and stop < 0):
             n = len(self)
             start = n + start if is_int(start) and start < 0 else start                            
-            stop = n + stop if is_int(stop) and start < 0 else stop
+            stop = n + stop if is_int(stop) and stop < 0 else stop
         if start and self.order is not None:
             statement = statement.offset(start)
             stop = stop if stop is None else stop - start
         if stop is not None:
             statement = statement.limit(1+stop)
         res = list(self.engine.connect().execute(statement))
-        rows = res[slice(start, stop, step)]
-        return rows
+        if start is not None or stop is not None or step is not None:
+            return res[slice(start, stop, step)]
+        else:
+            return res
+    
+    def df(self):
+        """
+        This is a more optimized, faster version of the reader. It retuns the data as a pd.dataframe
+
+        >>> from pyg import * 
+        >>> t = sql_table(db = 'db', table = 'tbl', nullable = dict(a = int, b = float, c = str))
+        >>> rs =dictable(a = range(100)) * dict(b = list(np.arange(0,100,1.0))) * dict(c = list('abcdefghij'))
+        >>> t = t.insert_many(rs)      
+        
+        ## reading the data as t[::] is slow...
+        >>> x = timer(lambda : t[::])()
+        2022-08-21 18:03:52,594 - pyg - INFO - TIMER: took 0:00:13.139333 sec
+ 
+        ## reading the data as t.df() is much faster...
+        >>> y = timer(lambda : t.df())()
+        2022-08-21 18:04:24,809 - pyg - INFO - TIMER: took 0:00:00.456988 sec
+
+        Returns
+        -------
+        pd.DataFrame
+            The data, optimized as a dataframe.
+
+        """
+        statement = self.statement()
+        res = self.engine.connect().execute(statement)
+        return pd.DataFrame(res)
     
     def _rows_to_docs(self, rows, reader = None, load = True):
         """

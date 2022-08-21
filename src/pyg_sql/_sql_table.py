@@ -1061,7 +1061,10 @@ class sql_cursor(object):
         """
         statement = self.statement()
         res = self.engine.connect().execute(statement)
-        return pd.DataFrame(res)
+        if pd.__version__.startswith('0'):
+            return pd.DataFrame(list(res), self.columns)
+        else:
+            return pd.DataFrame(res)
     
     def _rows_to_docs(self, rows, reader = None, load = True):
         """

@@ -1062,7 +1062,7 @@ class sql_cursor(object):
         statement = self.statement()
         res = self.engine.connect().execute(statement)
         if pd.__version__.startswith('0'):
-            return pd.DataFrame(list(res), self.columns)
+            return pd.DataFrame(list(res), columns = as_list(self.selection) or self.columns)
         else:
             return pd.DataFrame(res)
     

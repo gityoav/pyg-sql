@@ -1,6 +1,6 @@
 import sqlalchemy as sa
 from sqlalchemy_utils.functions import create_database
-from pyg_base import cache, cfg_read, as_list, dictable, replace, Dict, is_dict, is_dictable, is_strs, is_str, is_int, is_date, dt2str, ulist, try_back, unique
+from pyg_base import cache, cfg_read, as_list, dictable, lower, replace, Dict, is_dict, is_dictable, is_strs, is_str, is_int, is_date, dt2str, ulist, try_back, unique
 from pyg_encoders import as_reader, as_writer, dumps, loads
 from sqlalchemy import Table, Column, Integer, String, MetaData, Identity, Float, DATE, DATETIME, TIME, select, func, not_, desc, asc
 from sqlalchemy.orm import Session
@@ -624,6 +624,7 @@ class sql_cursor(object):
         return [c.name for c in self.table.columns if c.server_default is not None]
     
     def _and(self, doc, keys):
+        keys = self._col(keys)
         if len(keys) == 1:
             key = keys[0]
             return self.table.c[key] == doc[key]
@@ -671,6 +672,7 @@ class sql_cursor(object):
         >>> assert t._c(expression) == sa.and_(t.c.a == 1, t.c.b == 2)
         """
         if isinstance(expression, dict):
+            expression = self._col(expression)
             t = self.table.c    
             return sa.and_(*[sa.or_(*[t[k] == i for i in v]) if isinstance(v, list) else t[k] == self._c(v) for k,v in expression.items()]) 
         elif isinstance(expression, (list, tuple)):
@@ -692,25 +694,25 @@ class sql_cursor(object):
         >>> assert t > dict(weight = 30, height = 20) == sa.and_(t.c.weight >= 30, t.c.height > 20)
         """
         if not isinstance(kwargs, dict) and len(self._ids) == 1:
-            kwargs = {self._ids : kwargs}
+            kwargs = self._col({self._ids : kwargs})
         c = self.table.c
         return self.inc(sa.and_(*[c[key] >= value for key, value in kwargs.items()]))
 
     def __gt__(self, kwargs):
         if not isinstance(kwargs, dict) and len(self._ids) == 1:
-            kwargs = {self._ids : kwargs}
+            kwargs = self._col({self._ids : kwargs})
         c = self.table.c
         return self.inc(sa.and_(*[c[key] > value for key, value in kwargs.items()]))
 
     def __le__(self, kwargs):
         if not isinstance(kwargs, dict) and len(self._ids) == 1:
-            kwargs = {self._ids : kwargs}
+            kwargs = self._col({self._ids : kwargs})
         c = self.table.c
         return self.inc(sa.and_(*[c[key] <= value for key, value in kwargs.items()]))
 
     def __lt__(self, kwargs):
         if not isinstance(kwargs, dict) and len(self._ids) == 1:
-            kwargs = {self._ids : kwargs}
+            kwargs = self._col({self._ids : kwargs})
         c = self.table.c
         return self.inc(sa.and_(*[c[key] < value for key, value in kwargs.items()]))
             
@@ -842,6 +844,19 @@ class sql_cursor(object):
     
     count = __len__
 
+
+    def _col(self, column):
+        columns = self.columns
+        cols = dict(zip(lower(columns), columns))
+        if is_str(column):
+            return cols[column.lower()]
+        elif isinstance(column, (list, tuple)):
+            return [cols[c.lower()] for c in column]
+        elif isinstance(column, dict):
+            return type(column)({cols[k.lower()] : v for k, v in column.items()})
+        else:
+            raise ValueError('column %s cannot be converted to table columns'%column)
+
     @property    
     def columns(self):
         return ulist([col.name for col in self.table.columns])
@@ -850,7 +865,7 @@ class sql_cursor(object):
         if len(value) == 0:
             return self
         res = self.copy()
-        res.selection = as_list(value)
+        res.selection = self._col(value)
         return res
     
     def _enrich(self, doc, columns = None):
@@ -1344,6 +1359,7 @@ class sql_cursor(object):
         """
         if len(keys) == 0 and self.selection is not None:
             keys = as_list(self.selection)
+        keys = self._col(keys)
         session = Session(self.engine)
         cols = [self.table.columns[k] for k in keys]
         query = session.query(*cols)

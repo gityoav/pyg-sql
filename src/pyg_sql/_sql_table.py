@@ -339,7 +339,7 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         meta.create_all(e)
     res = sql_cursor(table = tbl, schema = schema, db = db, server = server, engine = e, 
                      spec = None, selection = None, reader = reader, writer = writer, 
-                     pk = pk, doc = doc)
+                     pk = list(pk) if isinstance(pk, dict) else pk, doc = doc)
     return res
 
 class sql_cursor(object):

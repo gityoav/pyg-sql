@@ -865,7 +865,7 @@ class sql_cursor(object):
         if len(value) == 0:
             return self
         res = self.copy()
-        res.selection = self._col(value)
+        res.selection = self._col(as_list(value))
         return res
     
     def _enrich(self, doc, columns = None):

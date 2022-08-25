@@ -1055,7 +1055,24 @@ class sql_cursor(object):
     
     def df(self, decimal2float = True):
         """
-        This is a more optimized, faster version of the reader. It retuns the data as a pd.dataframe
+        This is a more optimized, faster version for reading the table. 
+        It retuns the data as a pd.DataFrame,
+        In addition, it converts NUMERIC type (which is cast to decimal.Decimal) into a float
+
+        
+        Parameters
+        ----------
+        decimal2float: bool
+            converts sql.types.NUMERIC columns into float
+
+        Returns
+        -------
+        pd.DataFrame
+            The data, optimized as a dataframe.
+
+        
+        Example: speed comparison
+        --------
 
         >>> from pyg import * 
         >>> t = sql_table(db = 'db', table = 'tbl', nullable = dict(a = int, b = float, c = str))
@@ -1070,10 +1087,6 @@ class sql_cursor(object):
         >>> y = timer(lambda : t.df())()
         2022-08-21 18:04:24,809 - pyg - INFO - TIMER: took 0:00:00.456988 sec
 
-        Returns
-        -------
-        pd.DataFrame
-            The data, optimized as a dataframe.
 
         """
         statement = self.statement()

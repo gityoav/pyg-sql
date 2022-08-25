@@ -4,6 +4,7 @@ from pyg_base import cache, cfg_read, as_list, dictable, lower, replace, Dict, i
 from pyg_encoders import as_reader, as_writer, dumps, loads
 from sqlalchemy import Table, Column, Integer, String, MetaData, Identity, Float, DATE, DATETIME, TIME, select, func, not_, desc, asc
 from sqlalchemy.orm import Session
+from sqlalchemy.types import NUMERIC, FLOAT, INT
 import datetime
 from copy import copy
 from pyg_base import logger
@@ -15,6 +16,7 @@ _doc = 'doc'
 _root = 'root'
 _deleted = 'deleted'
 _archived = 'archived_'
+_pd_is_old = pd.__version__.startswith('0')
 
 @cache
 def _servers():
@@ -1051,7 +1053,7 @@ class sql_cursor(object):
         else:
             return res
     
-    def df(self):
+    def df(self, decimal2float = True):
         """
         This is a more optimized, faster version of the reader. It retuns the data as a pd.dataframe
 
@@ -1076,10 +1078,17 @@ class sql_cursor(object):
         """
         statement = self.statement()
         res = self.engine.connect().execute(statement)
-        if pd.__version__.startswith('0'):
-            return pd.DataFrame(list(res), columns = as_list(self.selection) or self.columns)
+        if _pd_is_old:
+            res = pd.DataFrame(list(res), columns = as_list(self.selection) or self.columns)
         else:
-            return pd.DataFrame(res)
+            res = pd.DataFrame(res)
+        if decimal2float:
+            for col in res.columns:
+                t = self.table.columns[col].type
+                if isinstance(t, NUMERIC) and not isinstance(t, (FLOAT, INT)):
+                    res[col] = res[col].astype(float)
+        return res
+            
     
     def _rows_to_docs(self, rows, reader = None, load = True):
         """

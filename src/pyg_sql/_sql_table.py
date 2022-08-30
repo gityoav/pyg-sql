@@ -18,6 +18,17 @@ _deleted = 'deleted'
 _archived = 'archived_'
 _pd_is_old = pd.__version__.startswith('0')
 
+_types = {str: String, 'str' : String, 
+          int : Integer, 'int' : Integer,
+          float: Float, 
+          'dec' : sa.DECIMAL(0), 'dec1' : sa.DECIMAL(1), 'dec2' : sa.DECIMAL(2), 'dec3' : sa.DECIMAL(3), 'dec4' : sa.DECIMAL(4), 'dec5' : sa.DECIMAL(5), 
+          datetime.date: DATE, 'date' : DATE,
+          datetime.datetime : DATETIME, 'datetime' : DATETIME,
+          datetime.time: TIME, 'time' : TIME,
+          bin : sa.VARBINARY}
+
+_orders = {1 : asc, True: asc, 'asc': asc, asc : asc, -1: desc, False: desc, 'desc': desc, desc: desc}
+
 @cache
 def _servers():
     res = cfg_read().get('sql_server', {})
@@ -172,16 +183,6 @@ def get_engine(*pairs, **connection):
     """
     return _get_engine(*pairs, **connection)
     
-_types = {str: String, 'str' : String, 
-          int : Integer, 'int' : Integer,
-          float: Float, 
-          'dec' : sa.DECIMAL(0), 'dec1' : sa.DECIMAL(1), 'dec2' : sa.DECIMAL(2), 'dec3' : sa.DECIMAL(3), 'dec4' : sa.DECIMAL(4), 'dec5' : sa.DECIMAL(5), 
-          datetime.date: DATE, 'date' : DATE,
-          datetime.datetime : DATETIME, 'datetime' : DATETIME,
-          datetime.time: TIME, 'time' : TIME,
-          bin : sa.VARBINARY}
-
-_orders = {1 : asc, True: asc, 'asc': asc, asc : asc, -1: desc, False: desc, 'desc': desc, desc: desc}
 
 @cache
 def _get_table(table_name, schema, db, server):
@@ -959,7 +960,9 @@ class sql_cursor(object):
             return edoc
         else:
             edoc = {key: value for key, value in edoc.items() if key in columns}
-            edoc[self.doc] = doc
+            pk = self._pk + [self.doc]
+            drop = [key for key in edoc if key not in pk]
+            edoc[self.doc] = type(doc)({k : v for k, v in doc.items() if k not in drop})
             return edoc
 
     def _writer(self, writer = None, doc = None, kwargs = None):

@@ -1028,7 +1028,6 @@ class sql_cursor(object):
             res = loads(res)
         for r in as_list(reader):
             res = res[r] if is_strs(r) else r(res)
-        res = pickle_loads(res)
         return res
 
     def _read_row(self, row, reader = None, columns = None, load = True):

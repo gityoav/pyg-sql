@@ -30,9 +30,12 @@ _types = {str: String, 'str' : String,
 
 _orders = {1 : asc, True: asc, 'asc': asc, asc : asc, -1: desc, False: desc, 'desc': desc, desc: desc}
 
-@loop(list, dict, tuple)
 def pickle_loads(value):
-    if isinstance(value, bytes):
+    if isinstance(value, dict):
+        return type(value)({k: pickle_loads(v) for k, v in value.items()})
+    elif isinstance(value, (list, tuple)):
+        return type(value)([pickle_loads(v) for v in value])        
+    elif isinstance(value, bytes):
         return pickle.loads(value)
     else:
         return value

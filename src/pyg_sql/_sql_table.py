@@ -1,6 +1,6 @@
 import sqlalchemy as sa
 from sqlalchemy_utils.functions import create_database
-from pyg_base import cache, cfg_read, as_list, dictable, lower, replace, Dict, is_dict, is_dictable, is_strs, is_str, is_int, is_date, dt2str, ulist, try_back, unique
+from pyg_base import cache, cfg_read, as_list, dictable, lower, loop, replace, Dict, is_dict, is_dictable, is_strs, is_str, is_int, is_date, dt2str, ulist, try_back, unique
 from pyg_encoders import as_reader, as_writer, dumps, loads
 from sqlalchemy import Table, Column, Integer, String, MetaData, Identity, Float, DATE, DATETIME, TIME, select, func, not_, desc, asc
 from sqlalchemy.orm import Session
@@ -29,6 +29,13 @@ _types = {str: String, 'str' : String,
           bin : sa.VARBINARY}
 
 _orders = {1 : asc, True: asc, 'asc': asc, asc : asc, -1: desc, False: desc, 'desc': desc, desc: desc}
+
+@loop(list, dict, tuple)
+def pickle_loads(value):
+    if isinstance(value, bytes):
+        return pickle.loads(value)
+    else:
+        return value
 
 @cache
 def _servers():
@@ -1016,8 +1023,7 @@ class sql_cursor(object):
         res = item
         if is_str(res) and res.startswith('{') and load:
             res = loads(res)
-        elif isinstance(res, bytes):
-            res = pickle.loads(res)
+        res = pickle_loads(res)
         for r in as_list(reader):
             res = res[r] if is_strs(r) else r(res)
         return res

@@ -99,8 +99,10 @@ def sql_loads(path):
     else:
         # print('loading from...\n', row)
         data = row[0][_data]
-        obj = pickle_loads(data)
-        return obj
+        if isinstance(data, bytes):
+            return pickle.loads(data)
+        else:
+            return data
 
 _sql_loads = encode(sql_loads)
 

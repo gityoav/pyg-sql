@@ -10,6 +10,7 @@ from copy import copy
 from pyg_base import logger
 from functools import partial
 import pandas as pd
+import pickle
 
 _id = '_id'
 _doc = 'doc'
@@ -1015,6 +1016,8 @@ class sql_cursor(object):
         res = item
         if is_str(res) and res.startswith('{') and load:
             res = loads(res)
+        elif isinstance(res, bytes):
+            res = pickle.loads(res)
         for r in as_list(reader):
             res = res[r] if is_strs(r) else r(res)
         return res

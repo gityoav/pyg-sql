@@ -1,5 +1,5 @@
 from pyg_base import cache, Dict, is_pd, is_arr, is_dict, dictable, cfg_read
-from pyg_sql._sql_table import sql_table, _pairs2connection, _schema, _database, get_server
+from pyg_sql._sql_table import sql_table, _pairs2connection, _schema, _database, get_server, pickle_loads
 from pyg_encoders import encode, cell_root, root_path, root_path_check, dictable_decode, WRITERS
 import pandas as pd
 import pickle
@@ -99,7 +99,7 @@ def sql_loads(path):
     else:
         # print('loading from...\n', row)
         data = row[0][_data]
-        obj = pickle.loads(data)
+        obj = pickle_loads(data)
         return obj
 
 _sql_loads = encode(sql_loads)

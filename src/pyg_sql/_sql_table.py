@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.types import NUMERIC, FLOAT, INT
 import datetime
 from copy import copy
-from pyg_base import logger
+from pyg_base import logger, is_regex
 from functools import partial
 import pandas as pd
 import pickle
@@ -39,6 +39,25 @@ def pickle_loads(value):
         return pickle.loads(value)
     else:
         return value
+
+def _pair_wise_filter(t, k, v):
+    """
+    t is a sqlalchemy column.c filter
+    """
+    if is_regex(v):
+        p = v.pattern
+        if not p.startswith('%'):
+            p = '%' + p
+        if not p.endswith('%'):
+            p = p + '%'
+        return t[k].like(p)
+    elif is_str(v) and v.startswith('%') and v.endswith('%'):
+        return t[k].like(v)
+    elif isinstance(v, list):
+        return sa.or_(*[_pair_wise_filter(t, k, i) for i in v])
+    else:
+        return t[k] == v
+
 
 @cache
 def _servers():
@@ -674,7 +693,7 @@ class sql_cursor(object):
         """
         ids = self._ids
         return sorted([c.name for c in self.tbl.columns if c.nullable is False and c.name not in ids])
-        
+
     
     def _c(self, expression):
         """
@@ -684,11 +703,12 @@ class sql_cursor(object):
         ---------
         >>> expression = dict(a = 1, b = 2)
         >>> assert t._c(expression) == sa.and_(t.c.a == 1, t.c.b == 2)
+        c = table.insert_many(dictable(a = ['a','aa','b', 'c'], b = ['bb','b1','c','d']))
         """
         if isinstance(expression, dict):
             expression = self._col(expression)
-            t = self.table.c    
-            return sa.and_(*[sa.or_(*[t[k] == i for i in v]) if isinstance(v, list) else t[k] == self._c(v) for k,v in expression.items()]) 
+            t = self.table.c
+            return sa.and_(*[_pair_wise_filter(t, k, v) for k,v in expression.items()]) 
         elif isinstance(expression, (list, tuple)):
             return sa.or_(*[self._c(v) for v in expression])            
         else:

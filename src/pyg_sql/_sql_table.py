@@ -1393,6 +1393,7 @@ class sql_cursor(object):
         """
         select DISTINCT *keys FROM TABLE
         """
+        keys = as_list(keys)
         if len(keys) == 0 and self.selection is not None:
             keys = as_list(self.selection)
         keys = self._col(keys)

@@ -244,6 +244,13 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
     >>> table.inc(b = 'a').delete()
     >>> assert len(table) == 2
     >>> assert table.distinct('b') == ['b']
+
+    >>> t2 = sql_table(table = 't2', nullable = dict(a = int, b = str), db = 'db')
+    >>> t2 = t2.insert(dictable(a = [2,3], b = ['b','c']))
+
+
+    import sqlalchemy as sa
+    
     >>> table.drop()
     
     Example: ensure sql_table defaults for a doc store if 'doc' exists in existing table or no data columns are specified on creation
@@ -785,10 +792,14 @@ class sql_cursor(object):
         if self.selection is None:
             return self.select(self.columns - other)
         elif is_strs(self.selection):
-            return self.select(ulist(as_list(self.selection)) - other)
+            selection = self._col(as_list(self.selection))
+            return self.select(ulist(selection) - other)
         else:
-            raise ValueError('cannot subtract these columns while the selection is non empty, use self.select() to reset selection')
-    
+            selection = as_list(self.selection)
+            other = as_list(other)
+            selection = [col for col in selection if col.name not in other]
+            return self.select(selection)
+            
     def drop(self):
         logger.info('dropping table: %s.%s.%s'%(_database(self.db), 
                                                   self.schema, 
@@ -854,9 +865,9 @@ class sql_cursor(object):
         if is_str(column):
             return cols[column.lower()]
         elif isinstance(column, (list, tuple)):
-            return [cols[c.lower()] for c in column]
+            return [cols[c.lower()] if isinstance(c,str) else c for c in column]
         elif isinstance(column, dict):
-            return type(column)({cols[k.lower()] : v for k, v in column.items()})
+            return type(column)({cols[k.lower()]: v for k, v in column.items()})
         else:
             raise ValueError('column %s cannot be converted to table columns'%column)
 
@@ -868,7 +879,7 @@ class sql_cursor(object):
         if len(value) == 0:
             return self
         res = self.copy()
-        res.selection = self._col(as_list(value))
+        res.selection = as_list(value)
         return res
     
     def _enrich(self, doc, columns = None):
@@ -917,8 +928,8 @@ class sql_cursor(object):
             ids = self._ids
             res_no_ids = type(res)({k : v for k, v in res.items() if k not in ids}) if ids else res
             tbl = self.inc().inc(**doc_id)
-            rows = tbl.sort(ids)._read_statement() ## row format
-            docs = tbl._rows_to_docs(rows, reader = False, load = False) ## do not transform the document, keep in raw format
+            read = tbl.sort(ids)._read_statement() ## row format
+            docs = tbl._rows_to_docs(reader = False, load = False, **read) ## do not transform the document, keep in raw format
             if len(docs) == 0:
                 with self.engine.connect() as conn: 
                     conn.execute(self.table.insert(),[res_no_ids])
@@ -1050,11 +1061,12 @@ class sql_cursor(object):
             stop = stop if stop is None else stop - start
         if stop is not None:
             statement = statement.limit(1+stop)
-        res = list(self.engine.connect().execute(statement))
+        executed = self.engine.connect().execute(statement)
+        columns = list(executed.keys())
+        data = list(executed)
         if start is not None or stop is not None or step is not None:
-            return res[slice(start, stop, step)]
-        else:
-            return res
+            data = data[slice(start, stop, step)]
+        return dict(data = data, columns = columns)
     
     def df(self, decimal2float = True):
         """
@@ -1094,8 +1106,9 @@ class sql_cursor(object):
         """
         statement = self.statement()
         res = self.engine.connect().execute(statement)
+        columns = list(res.keys())
         if _pd_is_old:
-            res = pd.DataFrame(list(res), columns = as_list(self.selection) or self.columns)
+            res = pd.DataFrame(list(res), columns = columns)
         else:
             res = pd.DataFrame(res)
         if decimal2float:
@@ -1106,30 +1119,37 @@ class sql_cursor(object):
         return res
             
     
-    def _rows_to_docs(self, rows, reader = None, load = True):
+    def _rows_to_docs(self, data, reader = None, load = True, columns = None):
         """
         starts at raw values from the database and returns a list of read-dicts (or a single dict) from the database
         """
-        columns = as_list(self.selection) if self.selection else self.columns
+        if columns is None:
+            columns = as_list(self.selection) if self.selection else self.columns
         reader = self._reader(reader)
-        if isinstance(rows, list):
-            return [self._read_row(row, reader = reader, columns = columns, load = load) for row in rows]
+        if isinstance(data, list):
+            return [self._read_row(row, reader = reader, columns = columns, load = load) for row in data]
         else:        
-            return self._read_row(rows, reader = reader, columns = columns, load = load)
+            return self._read_row(data, reader = reader, columns = columns, load = load)
 
     def docs(self, start = None, stop = None, step = None, reader = None):
-        rows = self._read_statement(start = start, stop = stop, step = step)
-        docs = self._rows_to_docs(rows, reader = reader)
+        read = self._read_statement(start = start, stop = stop, step = step)
+        docs = self._rows_to_docs(reader = reader, **read)
         return dictable(docs)
     
     def read(self, item = 0, reader = None):
         value = len(self) + item if item < 0 else item
         statement = self.statement()
         if self.order is None:
-            row = list(self.engine.connect().execute(statement.limit(value+1)))[value]
+            executed = self.engine.connect().execute(statement.limit(value+1))
+            columns = list(executed.keys())
+            data = list(executed)
+            row = data[value]
         else:
-            row = list(self.engine.connect().execute(statement.offset(value).limit(1)))[0]
-        doc = self._rows_to_docs(row, reader = reader)
+            executed = self.engine.connect().execute(statement.offset(value).limit(1))
+            columns = list(executed.keys())
+            data = list(executed)
+            row = data[0]
+        doc = self._rows_to_docs(data = row, reader = reader, columns = columns)
         rtn = self._undock(doc)
         return rtn
 
@@ -1167,9 +1187,9 @@ class sql_cursor(object):
                 reader = False
             else:
                 reader = None
-            rows = self._read_statement(start = start, stop = stop, step = step)
-            docs = self._rows_to_docs(rows, reader = reader)
-            columns = self.columns
+            read = self._read_statement(start = start, stop = stop, step = step)
+            docs = self._rows_to_docs(reader = reader, **read)
+            columns = read['columns'] #self.columns
             res = dictable([self._undock(doc, columns = columns) for doc in docs])
             return res
 
@@ -1295,7 +1315,8 @@ class sql_cursor(object):
             statement = select(self.table)
         elif is_strs(self.selection):               
             c = self.table.c
-            selection = [c[v] for v in as_list(self.selection)]
+            selection = self._col(as_list(self.selection))
+            selection = [c[v] for v in selection]
             statement = select(selection).select_from(self.table)
         else: ## user provided sql alchemy selection object
             statement = select(self.selection).select_from(self.table)
@@ -1351,8 +1372,8 @@ class sql_cursor(object):
         ids = self._ids
         if len(res):
             if self._pk and not self._is_deleted(): ## we first copy the existing data out to deleted db
-                rows = self._read_statement() 
-                docs = self._rows_to_docs(rows, reader = False, load = False)
+                read = self._read_statement() 
+                docs = self._rows_to_docs(reader = False, load = False, **read)
                 deleted = datetime.datetime.now()
                 for doc in docs:
                     doc[_deleted] = deleted
@@ -1378,16 +1399,18 @@ class sql_cursor(object):
         """
         return self.table.name
     
+    
     def distinct(self, *keys):
         """
         select DISTINCT *keys FROM TABLE
         """
         if len(keys) == 0 and self.selection is not None:
             keys = as_list(self.selection)
-        keys = self._col(keys)
+        if is_strs(keys):
+            keys = self._col(keys)
+            keys = [self.table.columns[k] for k in keys]
         session = Session(self.engine)
-        cols = [self.table.columns[k] for k in keys]
-        query = session.query(*cols)
+        query = session.query(*keys)
         if self.spec is not None:
             query = query.where(self.spec)        
         res = query.distinct().all()

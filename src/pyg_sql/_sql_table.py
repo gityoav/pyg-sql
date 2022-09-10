@@ -642,7 +642,7 @@ class sql_cursor(object):
         self.table = table
         self.schema = schema
         self.db = db
-        self.server = get_server(server)
+        self.server = server
         self.engine = engine or get_engine(db = self.db, server = self.server)
         self.spec = spec
         self.selection = selection

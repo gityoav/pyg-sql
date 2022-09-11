@@ -220,7 +220,9 @@ def _get_table(table_name, schema, db, server):
     meta = MetaData()
     return Table(table_name, meta, autoload_with = e, schema = schema)
 
-def sql_table(table, db = None, non_null = None, nullable = None, _id = None, schema = None, server = None, reader = None, writer = None, pk = None, doc = None, mode = None, spec = None, selection = None, order = None, joint = None):
+def sql_table(table, db = None, non_null = None, nullable = None, _id = None, schema = None, 
+              server = None, reader = None, writer = None, pk = None, doc = None, mode = None, 
+              spec = None, selection = None, order = None, joint = None):
     """
     Creates a sql table. Can also be used to simply read table from the db
 
@@ -370,7 +372,7 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         tbl = Table(table_name, meta, *cols, schema = schema)
         meta.create_all(e)
     res = sql_cursor(table = tbl, schema = schema, db = db, server = server, engine = e, 
-                     spec = None, selection = None, reader = reader, writer = writer, 
+                     reader = reader, writer = writer, 
                      pk = list(pk) if isinstance(pk, dict) else pk, doc = doc,
                      spec = spec, selection = selection, order = order, joint = joint)
     return res

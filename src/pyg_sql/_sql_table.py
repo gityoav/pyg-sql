@@ -220,7 +220,7 @@ def _get_table(table_name, schema, db, server):
     meta = MetaData()
     return Table(table_name, meta, autoload_with = e, schema = schema)
 
-def sql_table(table, db = None, non_null = None, nullable = None, _id = None, schema = None, server = None, reader = None, writer = None, pk = None, doc = None, mode = None):
+def sql_table(table, db = None, non_null = None, nullable = None, _id = None, schema = None, server = None, reader = None, writer = None, pk = None, doc = None, mode = None, spec = None, selection = None, order = None, joint = None):
     """
     Creates a sql table. Can also be used to simply read table from the db
 
@@ -371,7 +371,8 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         meta.create_all(e)
     res = sql_cursor(table = tbl, schema = schema, db = db, server = server, engine = e, 
                      spec = None, selection = None, reader = reader, writer = writer, 
-                     pk = list(pk) if isinstance(pk, dict) else pk, doc = doc)
+                     pk = list(pk) if isinstance(pk, dict) else pk, doc = doc,
+                     spec = spec, selection = selection, order = order, joint = joint)
     return res
 
 class sql_cursor(object):
@@ -497,7 +498,7 @@ class sql_cursor(object):
     a |m   |ann    |90   |a         |maths    |m         |andrews|mandy miles  
     a |z   |ann    |85   |a         |zoology  |z         |andrews|zoe zhenya   
     b |m   |ben    |70   |b         |maths    |m         |baxter |mandy miles  
-    b |g   |ben    |60   |b         |geography|g         |baxter |george graham
+    b |g   |ben    |60   |b         |geography|g         |baxter |pportgeorge graham
     c |g   |charles|50   |c         |geography|g         |cohen  |george graham
     c |z   |charles|45   |c         |zoology  |z         |cohen  |zoe zhenya       
 
@@ -773,6 +774,7 @@ class sql_cursor(object):
 
         """
         rs = dictable(table = [j[0] for j in self.joint])
+        rs = rs(table = lambda table: table() if isinstance(table, partial) else table)
         res = rs(grp = lambda table: dictable(column = table.columns, col = lower(table.columns))).ungroup().listby('col')
         duplicates = dict(res.inc(lambda column: len(column)>1)['col','table'])
         res = res.inc(lambda column: len(column)==1).do(last, 'column', 'table')
@@ -948,6 +950,8 @@ class sql_cursor(object):
         res = self.table
         for j in as_list(self.joint):            
             right, onclose, isouter, full = j
+            if isinstance(right, partial):
+                right = right()
             if isinstance(right, sql_cursor):
                 right = right._table
             if is_strs(onclose):

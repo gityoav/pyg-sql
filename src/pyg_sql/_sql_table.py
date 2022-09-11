@@ -1,6 +1,6 @@
 import sqlalchemy as sa
 from sqlalchemy_utils.functions import create_database
-from pyg_base import cache, cfg_read, as_list, dictable, lower, loop, replace, Dict, is_dict, is_dictable, is_strs, is_str, is_int, is_date, dt2str, ulist, try_back, unique
+from pyg_base import cache, cfg_read, as_list, dictable, lower, last, loop, replace, Dict, is_dict, is_dictable, is_strs, is_str, is_int, is_date, dt2str, ulist, try_back, unique
 from pyg_encoders import as_reader, as_writer, dumps, loads
 from sqlalchemy import Table, Column, Integer, String, MetaData, Identity, Float, DATE, DATETIME, TIME, select, func, not_, desc, asc
 from sqlalchemy.orm import Session
@@ -251,11 +251,6 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
     mode : int, optional
         NOT IMPLEMENTED CURRENTLY
 
-    Raises
-    ------
-    ValueError
-        DESCRIPTION.
-
     Returns
     -------
     res : sql_cursor
@@ -264,6 +259,7 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
 
     Example: simple table creation
     ---------
+    >>> from pyg import * 
     >>> table = sql_table(table = 'test', nullable = dict(a = int, b = str), db = 'db')
     >>> table.insert(dict(a = 1, b = 'a'))
     >>> assert len(table) == 1
@@ -275,12 +271,6 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
     >>> assert len(table) == 2
     >>> assert table.distinct('b') == ['b']
 
-    >>> t2 = sql_table(table = 't2', nullable = dict(a = int, b = str), db = 'db')
-    >>> t2 = t2.insert(dictable(a = [2,3], b = ['b','c']))
-
-
-    import sqlalchemy as sa
-    
     >>> table.drop()
     
     Example: ensure sql_table defaults for a doc store if 'doc' exists in existing table or no data columns are specified on creation
@@ -290,6 +280,8 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
     table = sql_table(table = 'test', db = 'db', schema = 'dbo')
     assert tbl.doc == 'doc'
     table.drop()
+
+    Example: simple join
         
     """
     if isinstance(table, str):
@@ -392,7 +384,7 @@ class sql_cursor(object):
     - maintainance of a table where records are unique per specified primary keys while we auto-archive old data
     - creation of a full no-sql like document-store
 
-    pyg-sql "abandons" the relational part of SQL: we make using a single table extremely easy while forgo any multiple-tables-relations completely.
+    pyg-sql supports simple joins but not much more than that.
     
     ## access simplification
     
@@ -453,8 +445,72 @@ class sql_cursor(object):
     >>> assert len(t.where(t.c.age > 30)) == 2  # can filter using the standard sql-alchemy "where" statement 
 
 
-    ## insertion of "documents" into string columns...
+    Example: simple joining
+    -----------------------
+    >>> from pyg import * 
+    >>> students = sql_table(table = 'students', pk = ['id'], non_null = ['name', 'surname'], db = 'db')
+    >>> students.insert([dict(name = 'ann', surname = 'andrews', id = 'a'),
+                         dict(name = 'ben', surname = 'baxter', id = 'b'),
+                         dict(name = 'charles', surname = 'cohen', id = 'c')])
+
+    >>> subjects = sql_table(table = 'subjects', pk = ['id'], non_null = ['subject', 'teacher'], db = 'db')
+    >>> subjects.insert([dict(subject = 'maths', teacher = 'mandy miles', id = 'm'),
+                         dict(subject = 'geography', teacher = 'george graham', id = 'g'),
+                         dict(subject = 'zoology', teacher = 'zoe zhenya', id = 'z')])
+
+    >>> student_subject = sql_table(table = 'student_subject', non_null = {'student_id':str, 'subject_id':str, 'score': int})
+    >>> student_subject.insert([dict(student_id = 'a', subject_id = 'm', score = 90),
+                                dict(student_id = 'a', subject_id = 'z', score = 85),
+                                dict(student_id = 'b', subject_id = 'm', score = 70),
+                                dict(student_id = 'b', subject_id = 'g', score = 60),
+                                dict(student_id = 'c', subject_id = 'g', score = 50),
+                                dict(student_id = 'c', subject_id = 'z', score = 45),
+                                ])
     
+
+    >>> self = student_subject.join(students, dict(student_id = 'id'))
+
+    self[::]
+    id|name   |score|student_id|subject_id|surname
+    a |ann    |90   |a         |m         |andrews
+    a |ann    |85   |a         |z         |andrews
+    b |ben    |70   |b         |m         |baxter 
+    b |ben    |60   |b         |g         |baxter 
+    c |charles|50   |c         |g         |cohen  
+    c |charles|45   |c         |z         |cohen  
+
+    self.inc(surname = '%co%')[::]
+    dictable[2 x 6]
+    id|name   |score|student_id|subject_id|surname
+    c |charles|50   |c         |g         |cohen  
+    c |charles|45   |c         |z         |cohen  
+
+    >>> self.inc(score = [90,50])[::]
+    dictable[2 x 6]
+    id|name   |score|student_id|subject_id|surname
+    a |ann    |90   |a         |m         |andrews
+    c |charles|50   |c         |g         |cohen  
+
+    ## double join
+    >>> student_subject.join(students, dict(student_id = 'id')).join(subjects, dict(subject_id = 'id'))[::]
+    id|id_1|name   |score|student_id|subject  |subject_id|surname|teacher      
+    a |m   |ann    |90   |a         |maths    |m         |andrews|mandy miles  
+    a |z   |ann    |85   |a         |zoology  |z         |andrews|zoe zhenya   
+    b |m   |ben    |70   |b         |maths    |m         |baxter |mandy miles  
+    b |g   |ben    |60   |b         |geography|g         |baxter |george graham
+    c |g   |charles|50   |c         |geography|g         |cohen  |george graham
+    c |z   |charles|45   |c         |zoology  |z         |cohen  |zoe zhenya       
+
+    >>> full_join = student_subject.join(students, dict(student_id = 'id')).join(subjects, dict(subject_id = 'id'))
+    >>> full_join.inc(TEACHER = '%mandy%', SCORE = 90)
+    sql_cursor: db.dbo.student_subject  
+    SELECT student_id, subject_id, score, dbo.students.id, dbo.students.name, dbo.students.surname, dbo.subjects.id AS id_1, dbo.subjects.subject, dbo.subjects.teacher 
+    FROM dbo.student_subject JOIN dbo.students ON student_id = dbo.students.id JOIN dbo.subjects ON subject_id = dbo.subjects.id 
+    WHERE dbo.subjects.teacher LIKE "%mandy%" AND score = 90
+    1 records
+
+    :Example: insertion of "documents" into string columns...    
+    ----------------------------------------------------------
     It is important to realise that we already have much flexibility behind the scene in using "documents" inside string columns:
 
     >>> t = t.delete()
@@ -594,7 +650,9 @@ class sql_cursor(object):
     >>> assert list(read_from_db.salary.values) == [100, 200, 300]
     >>> assert list(read_from_file.values) == [100, 200, 300]
     """
-    def __init__(self, table, schema = None, db = None, engine = None, server = None, spec = None, selection = None, order = None, reader = None, writer = None, pk = None, doc = None, **_):
+    def __init__(self, table, schema = None, db = None, engine = None, server = None, 
+                 spec = None, selection = None, order = None, joint = None, reader = None, writer = None, 
+                 pk = None, doc = None, **_):
         """
         Parameters
         ----------
@@ -633,6 +691,7 @@ class sql_cursor(object):
             selection = table.selection if selection is None else selection
             schema = table.schema if schema is None else schema
             order = table.order if order is None else order
+            joint = table.joint if joint is None else joint
             reader = table.reader if reader is None else reader
             writer = table.writer if writer is None else writer
             pk = table.pk if pk is None else pk
@@ -647,6 +706,7 @@ class sql_cursor(object):
         self.spec = spec
         self.selection = selection
         self.order = order
+        self.joint = joint
         self.reader = reader
         self.writer = writer
         self.pk = pk
@@ -701,7 +761,42 @@ class sql_cursor(object):
         ids = self._ids
         return sorted([c.name for c in self.tbl.columns if c.nullable is False and c.name not in ids])
 
-    
+
+    @property
+    def _columns(self):
+        cols = self.columns
+        return dict(zip(lower(cols), cols))
+
+    def _joint_columns(self):
+        """
+        returns a mapping from lower col to both column name and table
+
+        """
+        rs = dictable(table = [j[0] for j in self.joint])
+        res = rs(grp = lambda table: dictable(column = table.columns, col = lower(table.columns))).ungroup().listby('col')
+        duplicates = dict(res.inc(lambda column: len(column)>1)['col','table'])
+        res = res.inc(lambda column: len(column)==1).do(last, 'column', 'table')
+        jcol = dict(res['col', 'column'])
+        jtbl = dict(res['col', 'table'])
+        return jcol, jtbl, duplicates
+
+    def _kw(self, **kwargs):
+        columns = self._columns
+        jcol, jtbl, duplicates = self._joint_columns()
+        conditions = []
+        for k, v in kwargs.items():
+            k = k.lower()
+            if k in columns:
+                conditions.append(_pair_wise_filter(self.table.c, columns[k], v))
+            elif k in duplicates:
+                raise ValueError(f'column {k} exists in multiple tables: \n{duplicates[k]}')
+            elif k in jcol:
+                conditions.append(_pair_wise_filter(jtbl[k].c, jcol[k], v))
+            else:
+                raise ValueError(f'column {k} not found')
+        return sa.and_(*conditions)
+
+
     def _c(self, expression):
         """
         converts an expression to a sqlalchemy filtering expression
@@ -713,9 +808,10 @@ class sql_cursor(object):
         c = table.insert_many(dictable(a = ['a','aa','b', 'c'], b = ['bb','b1','c','d']))
         """
         if isinstance(expression, dict):
-            expression = self._col(expression)
-            t = self.table.c
-            return sa.and_(*[_pair_wise_filter(t, k, v) for k,v in expression.items()]) 
+            return self._kw(**expression)
+            # expression = self._col(expression)
+            # t = self.table.c
+            # return sa.and_(*[_pair_wise_filter(t, k, v) for k,v in expression.items()]) 
         elif isinstance(expression, (list, tuple)):
             return sa.or_(*[self._c(v) for v in expression])            
         else:
@@ -839,6 +935,29 @@ class sql_cursor(object):
         self.table.drop(bind = self.engine)
 
     
+    def join(self, right, onclose = None, isouter = False, full = False):
+        res = self.copy()
+        res.joint = as_list(self.joint) + [(right, onclose, isouter, full)]
+        return res
+
+    @property
+    def _table(self):
+        """
+        a table supporting join objects
+        """
+        res = self.table
+        for j in as_list(self.joint):            
+            right, onclose, isouter, full = j
+            if isinstance(right, sql_cursor):
+                right = right._table
+            if is_strs(onclose):
+                onclose = as_list(onclose)
+                onclose = sa.and_(*[self.c[col] == right.c[col] for col in onclose])
+            elif is_dict(onclose):
+                onclose = sa.and_(*[self.c[key] == right.c[value] for key, value in onclose.items()])
+            res = res.join(right, onclose, isouter = isouter, full = full)
+        return res
+
     def exc(self, *args, **kwargs):
         """
         Exclude: This returns a table with additional filtering OPPOSITE TO inc. note that you can build it iteratively
@@ -882,7 +1001,7 @@ class sql_cursor(object):
     
     
     def __len__(self):
-        statement = select(func.count()).select_from(self.table)
+        statement = select(func.count()).select_from(self._table)
         if self.spec is not None:
             statement = statement.where(self.spec)
         return list(self.engine.connect().execute(statement))[0][0]
@@ -1342,15 +1461,16 @@ class sql_cursor(object):
         """
         performs a selection based on self.selection
         """
+        table = self._table
         if self.selection is None:
-            statement = select(self.table)
+            statement = select(table)
         elif is_strs(self.selection):               
             c = self.table.c
             selection = self._col(as_list(self.selection))
             selection = [c[v] for v in selection]
-            statement = select(selection).select_from(self.table)
+            statement = select(selection).select_from(table)
         else: ## user provided sql alchemy selection object
-            statement = select(self.selection).select_from(self.table)
+            statement = select(self.selection).select_from(table)
         return statement
     
     def statement(self):
@@ -1454,7 +1574,7 @@ class sql_cursor(object):
         statement = self.statement()
         params = statement.compile().params
         prefix = '%s.%s'%(self.schema, self.table.name) if self.schema else self.table.name
-        text = str(statement).replace(prefix + '.','')
+        text = str(statement).replace('"','').replace(prefix + '.','')
         for k,v in params.items():
             text = text.replace(':'+k, '"%s"'%v if is_str(v) else dt2str(v) if is_date(v) else str(v))
             

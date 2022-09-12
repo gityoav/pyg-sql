@@ -775,7 +775,7 @@ class sql_cursor(object):
         returns a mapping from lower col to both column name and table
 
         """
-        rs = dictable(table = [j[0] for j in self.joint])
+        rs = dictable(table = [j[0] for j in as_list(self.joint)])
         rs = rs(table = lambda table: table() if isinstance(table, partial) else table)
         res = rs(grp = lambda table: dictable(column = table.columns, col = lower(table.columns))).ungroup().listby('col')
         duplicates = dict(res.inc(lambda column: len(column)>1)['col','table'])

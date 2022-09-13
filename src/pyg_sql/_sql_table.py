@@ -1284,6 +1284,8 @@ class sql_cursor(object):
                 t = self.table.columns[col].type
                 if isinstance(t, NUMERIC) and not isinstance(t, (FLOAT, INT)):
                     res[col] = res[col].astype(float)
+        if is_strs(self.select) and lower(as_list(self.select)) == lower(list(res.columns)):
+            res.columns = self.select
         return res
             
     

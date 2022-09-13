@@ -1284,8 +1284,8 @@ class sql_cursor(object):
                 t = self.table.columns[col].type
                 if isinstance(t, NUMERIC) and not isinstance(t, (FLOAT, INT)):
                     res[col] = res[col].astype(float)
-        if is_strs(self.select) and lower(as_list(self.select)) == lower(list(res.columns)):
-            res.columns = self.select
+        if is_strs(self.selection) and lower(as_list(self.selection)) == lower(list(res.columns)):
+            res.columns = self.selection            
         return res
             
     
@@ -1331,7 +1331,16 @@ class sql_cursor(object):
         - t['key'] or t['key1', 'key2'] are equivalent to t.distinct('key') or t.distinct('key1', 'key2') 
         - t[['key1', 'key2']] will add a "SELECT key1, key2" to the statent
         - t[0] to grab a specific record. Note: this works better if you SORT the table first!, use t.sort('age')[10] to grab the name of the 11th youngest child in the class
-        - t[::] a slice of the data: t.sort('age')[:10] are the 10 youngest students     
+        - t[::] a slice of the data: t.sort('age')[:10] are the 10 youngest students 
+        
+        :Example: support for columns case matching selection
+        ---------
+        >>> from pyg import * 
+        >>> t =sql_table(db = 'db', table = 't', nullable = ['a', 'b'])
+        >>> t.insert(dict(a=1, b = 2))
+        >>> assert t[['A']][::] == dictable(A = '1')
+        >>> assert t[['A']].df().columns[0] == 'A'
+        
         
         """
         if isinstance(value, list):
@@ -1361,6 +1370,11 @@ class sql_cursor(object):
             docs = self._rows_to_docs(reader = reader, **read)
             columns = read['columns'] #self.columns
             res = dictable([self._undock(doc, columns = columns) for doc in docs])
+            selection = as_list(self.selection)
+            if is_strs(selection) and lower(selection) == lower(sorted(res.columns)):
+                lower2selection = dict(zip(lower(selection), selection))
+                relabels = {col : lower2selection[col.lower()] for col in res.columns}
+                res = res.relabel(relabels)
             return res
 
         elif is_int(value):

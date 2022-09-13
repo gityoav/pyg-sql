@@ -29,17 +29,17 @@ def test_sql_table_base():
 
 
 def test_doc_store_save_and_read_dictable():
-    drop_table('test_table', db = 'test_db')
     db = partial(sql_table, table = 'test_table', db = 'test_db', schema = 'test', pk = 'key', doc = True)
     t = db()   
+    t = t.delete()
     doc = Dict(function = passthru, data = dictable(a = [1,2,3], b = 'b'), key = 'dictable', db = db)
     _ = t.update_one(doc)
     _ = t.update_one(doc)
     _ = t.update_one(doc)
     
     assert len(t) == 1
-    assert eq(t[0], doc)
-    assert eq(t.deleted[0] - 'deleted' , doc)
+    assert eq(t[0]-'db', doc-'db')
+    assert eq(t.deleted[0] - 'deleted' - 'db' , doc -'db')
     assert len(t.deleted) > 1
 
     t.deleted.drop()

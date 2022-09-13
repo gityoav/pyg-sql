@@ -30,6 +30,40 @@ _types = {str: String, 'str' : String,
 
 _orders = {1 : asc, True: asc, 'asc': asc, asc : asc, -1: desc, False: desc, 'desc': desc, desc: desc}
 
+
+
+def _get_columns(table):
+    """
+    returns a dict from lower-case columns to actual columns
+    works with tables, join objects or sql_cursors
+    """
+    if isinstance(table, sql_cursor):
+        table = table._table
+    cols = table.columns
+    res = {}
+    for col in cols:
+        name = col.name.lower()
+        res[name] = res.get(name, []) + [col]
+    return res
+
+
+def _pw_filter(col, v):
+    if is_regex(v):
+        p = v.pattern
+        if not p.startswith('%'):
+            p = '%' + p
+        if not p.endswith('%'):
+            p = p + '%'
+        return col.like(p)
+    elif is_str(v) and v.startswith('%') and v.endswith('%'):
+        return col.like(v)
+    elif isinstance(v, list):
+        return sa.or_(*[_pw_filter(col, i) for i in v])
+    else:
+        return col == v
+    
+
+
 def pickle_loads(value):
     if isinstance(value, dict):
         return type(value)({k: pickle_loads(v) for k, v in value.items()})
@@ -40,23 +74,24 @@ def pickle_loads(value):
     else:
         return value
 
-def _pair_wise_filter(t, k, v):
-    """
-    t is a sqlalchemy column.c filter
-    """
-    if is_regex(v):
-        p = v.pattern
-        if not p.startswith('%'):
-            p = '%' + p
-        if not p.endswith('%'):
-            p = p + '%'
-        return t[k].like(p)
-    elif is_str(v) and v.startswith('%') and v.endswith('%'):
-        return t[k].like(v)
-    elif isinstance(v, list):
-        return sa.or_(*[_pair_wise_filter(t, k, i) for i in v])
-    else:
-        return t[k] == v
+# def _pair_wise_filter(t, k, v):
+#     """
+#     t is a sqlalchemy column.c filter
+#     """
+#     if is_regex(v):
+#         p = v.pattern
+#         if not p.startswith('%'):
+#             p = '%' + p
+#         if not p.endswith('%'):
+#             p = p + '%'
+#         return t[k].like(p)
+#     elif is_str(v) and v.startswith('%') and v.endswith('%'):
+#         return t[k].like(v)
+#     elif isinstance(v, list):
+#         return sa.or_(*[_pair_wise_filter(t, k, i) for i in v])
+#     else:
+#         return t[k] == v
+
 
 
 @cache
@@ -174,6 +209,7 @@ def get_cstr(*pairs, **connection):
         params = '&'.join('%s=%s'%(k,v) for k,v in connection.items())
         return 'mssql+pyodbc://%(server)s/%(db)s%(params)s'%dict(server=server, db = db, params = '?' +params if params else '')
 
+
 def create_schema(engine, schema):
     if schema is None:
         return
@@ -186,6 +222,7 @@ def create_schema(engine, schema):
             engine.execute(sa.schema.CreateSchema(schema))
             logger.info('creating schema: %s'%schema)
     return schema
+
 
 @cache
 def _get_engine(*pairs, **connection):    
@@ -205,6 +242,7 @@ def _get_engine(*pairs, **connection):
         e = sa.create_engine(cstr)       
     return e
 
+
 def get_engine(*pairs, **connection):
     """
     returns a sqlalchemy engine object
@@ -214,11 +252,15 @@ def get_engine(*pairs, **connection):
     return _get_engine(*pairs, **connection)
     
 
+
 @cache
 def _get_table(table_name, schema, db, server):
     e = _get_engine(server = server, db = db, schema = schema)
     meta = MetaData()
     return Table(table_name, meta, autoload_with = e, schema = schema)
+
+
+
 
 def sql_table(table, db = None, non_null = None, nullable = None, _id = None, schema = None, 
               server = None, reader = None, writer = None, pk = None, doc = None, mode = None, 
@@ -770,34 +812,19 @@ class sql_cursor(object):
         cols = self.columns
         return dict(zip(lower(cols), cols))
 
-    def _joint_columns(self):
-        """
-        returns a mapping from lower col to both column name and table
-
-        """
-        if not self.joint:
-            return {},{},{}
-        rs = dictable(table = [j[0] for j in as_list(self.joint)])
-        rs = rs(table = lambda table: table() if isinstance(table, partial) else table)
-        res = rs(grp = lambda table: dictable(column = table.columns, col = lower(table.columns))).ungroup().listby('col')
-        duplicates = dict(res.inc(lambda column: len(column)>1)['col','table'])
-        res = res.inc(lambda column: len(column)==1).do(last, 'column', 'table')
-        jcol = dict(res['col', 'column'])
-        jtbl = dict(res['col', 'table'])
-        return jcol, jtbl, duplicates
 
     def _kw(self, **kwargs):
-        columns = self._columns
-        jcol, jtbl, duplicates = self._joint_columns()
+        columns = _get_columns(self._table)
         conditions = []
         for k, v in kwargs.items():
             k = k.lower()
             if k in columns:
-                conditions.append(_pair_wise_filter(self.table.c, columns[k], v))
-            elif k in duplicates:
-                raise ValueError(f'column {k} exists in multiple tables: \n{duplicates[k]}')
-            elif k in jcol:
-                conditions.append(_pair_wise_filter(jtbl[k].c, jcol[k], v))
+                col = columns[k]
+                if len(col) > 1:
+                    raise ValueError(f'condition {k}={v} has two columns {col} by this name so cannot satisfy')
+                else:
+                    col = col[0]
+                conditions.append(_pw_filter(col, v))
             else:
                 raise ValueError(f'column {k} not found')
         return sa.and_(*conditions)
@@ -815,9 +842,6 @@ class sql_cursor(object):
         """
         if isinstance(expression, dict):
             return self._kw(**expression)
-            # expression = self._col(expression)
-            # t = self.table.c
-            # return sa.and_(*[_pair_wise_filter(t, k, v) for k,v in expression.items()]) 
         elif isinstance(expression, (list, tuple)):
             return sa.or_(*[self._c(v) for v in expression])            
         else:
@@ -827,37 +851,6 @@ class sql_cursor(object):
     def c(self):
         return self.table.c
     
-    def __ge__(self, kwargs):
-        """
-        provides a quick filtering by overloading operator:
-        
-        :Example:
-        ---------
-        >>> assert t >= dict(age = 30) == t.c.age >= 30
-        >>> assert t > dict(weight = 30, height = 20) == sa.and_(t.c.weight >= 30, t.c.height > 20)
-        """
-        if not isinstance(kwargs, dict) and len(self._ids) == 1:
-            kwargs = self._col({self._ids : kwargs})
-        c = self.table.c
-        return self.inc(sa.and_(*[c[key] >= value for key, value in kwargs.items()]))
-
-    def __gt__(self, kwargs):
-        if not isinstance(kwargs, dict) and len(self._ids) == 1:
-            kwargs = self._col({self._ids : kwargs})
-        c = self.table.c
-        return self.inc(sa.and_(*[c[key] > value for key, value in kwargs.items()]))
-
-    def __le__(self, kwargs):
-        if not isinstance(kwargs, dict) and len(self._ids) == 1:
-            kwargs = self._col({self._ids : kwargs})
-        c = self.table.c
-        return self.inc(sa.and_(*[c[key] <= value for key, value in kwargs.items()]))
-
-    def __lt__(self, kwargs):
-        if not isinstance(kwargs, dict) and len(self._ids) == 1:
-            kwargs = self._col({self._ids : kwargs})
-        c = self.table.c
-        return self.inc(sa.and_(*[c[key] < value for key, value in kwargs.items()]))
             
     @property
     def _pk(self):
@@ -912,6 +905,7 @@ class sql_cursor(object):
 
     inc = find
     where = find
+    filter = find
     
     def __sub__(self, other):
         """
@@ -960,9 +954,25 @@ class sql_cursor(object):
                 right = right._table
             if is_strs(onclose):
                 onclose = as_list(onclose)
-                onclose = sa.and_(*[self.c[col] == right.c[col] for col in onclose])
-            elif is_dict(onclose):
-                onclose = sa.and_(*[self.c[key] == right.c[value] for key, value in onclose.items()])
+                onclose = dict(zip(onclose, onclose))
+            if is_dict(onclose):
+                lhs = _get_columns(self.table)
+                rhs = _get_columns(right)
+                conditions = []
+                for l,r in onclose.items():
+                    l = lhs[l.lower()]
+                    if len(l) > 1:
+                        raise ValueError(f'multiple columns of same name {l}')
+                    else:
+                        l = l[0]
+                    if is_str(r):
+                        r = rhs[r.lower()]
+                        if len(r) > 1:
+                            raise ValueError(f'multiple columns of same name {l}')
+                        else:
+                            r = r[0]
+                    conditions.append(l == r)
+                onclose = sa.and_(*conditions)
             res = res.join(right, onclose, isouter = isouter, full = full)
         return res
 
@@ -1027,7 +1037,7 @@ class sql_cursor(object):
         elif isinstance(column, dict):
             return type(column)({cols[k.lower()]: v for k, v in column.items()})
         else:
-            raise ValueError('column %s cannot be converted to table columns'%column)
+            raise ValueError(f'column {column} cannot be converted to table columns')
 
     @property    
     def columns(self):
@@ -1058,7 +1068,7 @@ class sql_cursor(object):
         found = {k : v[0] for k, v in missing.items() if len(set(v)) == 1}
         conflicted = {k : v for k, v in missing.items() if len(set(v)) > 1}
         if conflicted:
-            raise ValueError('got multiple possible values for each of these columns: %s'%conflicted)
+            raise ValueError(f'got multiple possible values for each of these columns: {conflicted}')
         res.update(found)
         return res
                 
@@ -1079,7 +1089,7 @@ class sql_cursor(object):
         if not ignore_bad_keys:
             bad_keys = {key: value for key, value in edoc.items() if key not in columns}
             if len(bad_keys) > 0:
-                raise ValueError('cannot insert into db a document with these keys: %s. The table only has these keys: %s'%(bad_keys, columns))        
+                raise ValueError(f'cannot insert into db a document with these keys: {bad_keys}. The table only has these keys: {columns}')        
         res = self._write_doc(edoc, columns = columns) if write else edoc
         if self._pk and not self._is_deleted():
             doc_id = self._id(res)
@@ -1334,9 +1344,9 @@ class sql_cursor(object):
             if n == 1:
                 return res[0]
             elif n == 0:
-                raise ValueError('no records found for %s'%value)
+                raise ValueError(f'no records found for {value}')
             else:
-                raise ValueError('multiple %s records found for %s'%(n, value))
+                raise ValueError(f'multiple {n} records found for {value}')
 
         elif isinstance(value, slice):
             start, stop, step = value.start, value.stop, value.step
@@ -1362,7 +1372,7 @@ class sql_cursor(object):
         n = len(existing)
         if n == 0:
             if upsert is False:
-                raise ValueError('no documents found to update %s'%doc)
+                raise ValueError(f'no documents found to update {doc}')
             else:
                 return self.insert_one(doc)
         elif self._pk:
@@ -1378,7 +1388,7 @@ class sql_cursor(object):
             res.update(edoc)
             return self._undock(res)
         elif n > 1:
-            raise ValueError('multiple documents found matching %s '%doc)
+            raise ValueError(f'multiple documents found matching {doc}')
                 
             
     def insert_many(self, docs, write = True):
@@ -1464,22 +1474,49 @@ class sql_cursor(object):
             raise ValueError('no document found for %s %s %s'%(doc, args, kwargs))
         elif len(res) > 1:
             raise ValueError('multiple documents found for %s %s %s'%(doc, args, kwargs))
-                
+    
+    
     def _select(self):
         """
         performs a selection based on self.selection
+
+        >>> from pyg import *        
+        >>> t1  = sql_table(table = 't1', nullable = ['a', 'b', 'c'], db = 'db')
+        >>> t1.insert(dictable(a = 'a', b = ['a','b','c'], c = 'hi'))
+        t1[['a','b']].inc(B = 'b')
+
+        >>> t2  = sql_table(table = 't2', nullable = ['x', 'y', 'z'], db = 'db')
+        >>> t2.insert(dictable(x = 'x', y = ['a','b','c'], z = 'world'))
+
+        >>> t4  = sql_table(table = 't4', nullable = ['a', 'b', 'c'], db = 'db')
+        >>> t4.insert(dictable(a = 'u', b = ['a','b','c'], c = 'beautiful'))
+
+        t1.join(t2, t1.c['b']==t2.c['y'])[['a', 'b', 'z']][::]
+        t1.join(t4, 'b').inc(a = 'a')
+        [col.name for col in t1.table.join(t4.table, t1.c.b==t4.c.b).columns]
         """
         table = self._table
         if self.selection is None:
-            statement = select(table)
-        elif is_strs(self.selection):               
-            c = self.table.c
-            selection = self._col(as_list(self.selection))
-            selection = [c[v] for v in selection]
-            statement = select(selection).select_from(table)
-        else: ## user provided sql alchemy selection object
-            statement = select(self.selection).select_from(table)
+            return select(table)
+        columns = _get_columns(self._table)
+        selection = []
+        for col in as_list(self.selection):
+            if is_str(col):
+                col = col.lower()
+                if col in columns:
+                    s = columns[col]
+                    if len(s) > 1:
+                        raise ValueError(f'{col} is in two tables {s} so cannot resolve')
+                    else:
+                        s = s[0]                        
+                    selection.append(s)
+                else:
+                    raise ValueError(f'{col} not found in the table')
+            else:
+                selection.append(col) ## it is assumed to be a sqlalchemy selection
+        statement = select(selection).select_from(table)
         return statement
+
     
     def statement(self):
         """

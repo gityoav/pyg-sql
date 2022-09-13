@@ -30,7 +30,20 @@ _types = {str: String, 'str' : String,
 
 _orders = {1 : asc, True: asc, 'asc': asc, asc : asc, -1: desc, False: desc, 'desc': desc, desc: desc}
 
-
+def _relabel(res, selection):
+    if not is_strs(selection):
+        return res       
+    lower_selection = lower(as_list(selection))
+    if lower_selection == selection:
+        return res
+    if isinstance(res, pd.DataFrame) and lower(list(res.columns)) == lower_selection:
+        res.columns = selection
+        return res
+    elif isinstance(res, dict) and sorted(lower(list(res.keys()))) == sorted(lower_selection):
+        lower2selection = dict(zip(lower_selection, selection))
+        return type(res)({lower2selection[key.lower()] : value for key, value in res.items()})
+    else:
+        return res       
 
 def _get_columns(table):
     """
@@ -475,7 +488,31 @@ class sql_cursor(object):
     >>> assert t.distinct('surname') == ['gate', 'git']
     >>> assert t['surname'] == ['gate', 'git']
     >>> assert t[dict(name = 'yoav')] == t.inc(name = 'yoav')[0]
+    
+    
+    :Example: access is case-insensitive
+    ------------------------------------
+    >>> from pyg_sql import *
+    >>> t = sql_table(db = 'test', table = 'case_insensitive', nullable = dict(number = int, text = str))
+    >>> t.delete()
+    >>> t.insert(dict(number = 1, text = 'world'))
+    >>> t.insert(dict(number = 2, text = 'hello'))
+    
+    When we access the columns without specification, we get the database column names
+    
+    >>> assert t[0] == {'number': 1, 'text': 'world'}
 
+    When we filter or sort, we can filter using any case for column names
+    
+    >>> assert len(t.inc(NUMBER = 2)) == 1
+
+    assert t.sort('TEXT')[0] == {'number': 2, 'text': 'hello'}
+
+    When we select, we can use any case, and key-case will follow your selection case:
+        
+    >>> assert t[['NUMBER','TexT']][0] == {'NUMBER': 1, 'TexT': 'world'}
+    >>> assert list(t[['Number','Text']].df().columns) == ['Number', 'Text']
+    >>> assert sorted(t[['Number','Text']][::].columns) == ['Number', 'Text']
 
     :Example: simple filtering
     --------------------------
@@ -1284,9 +1321,7 @@ class sql_cursor(object):
                 t = self.table.columns[col].type
                 if isinstance(t, NUMERIC) and not isinstance(t, (FLOAT, INT)):
                     res[col] = res[col].astype(float)
-        if is_strs(self.selection) and lower(as_list(self.selection)) == lower(list(res.columns)):
-            res.columns = self.selection            
-        return res
+        return _relabel(res, self.selection)
             
     
     def _rows_to_docs(self, data, reader = None, load = True, columns = None):
@@ -1321,7 +1356,7 @@ class sql_cursor(object):
             row = data[0]
         doc = self._rows_to_docs(data = row, reader = reader, columns = columns)
         rtn = self._undock(doc)
-        return rtn
+        return _relabel(rtn, self.selection)
 
                 
     def __getitem__(self, value):
@@ -1336,12 +1371,13 @@ class sql_cursor(object):
         :Example: support for columns case matching selection
         ---------
         >>> from pyg import * 
-        >>> t =sql_table(db = 'db', table = 't', nullable = ['a', 'b'])
-        >>> t.insert(dict(a=1, b = 2))
+        >>> t = sql_table(db = 'db', table = 't', nullable = ['a', 'b'])
+        >>> t.delete()
+        >>> t.insert(dict(a = dict(x=1,y=2), b = 2))
         >>> assert t[['A']][::] == dictable(A = '1')
         >>> assert t[['A']].df().columns[0] == 'A'
-        
-        
+        >>> assert t[['A']][0] == Dict(A = '1')
+        >>> assert t[['A', 'b']].read(0) == Dict(A = '1', b = '2')
         """
         if isinstance(value, list):
             return self.select(value)
@@ -1370,12 +1406,7 @@ class sql_cursor(object):
             docs = self._rows_to_docs(reader = reader, **read)
             columns = read['columns'] #self.columns
             res = dictable([self._undock(doc, columns = columns) for doc in docs])
-            selection = as_list(self.selection)
-            if is_strs(selection) and lower(selection) == lower(sorted(res.columns)):
-                lower2selection = dict(zip(lower(selection), selection))
-                relabels = {col : lower2selection[col.lower()] for col in res.columns}
-                res = res.relabel(relabels)
-            return res
+            return _relabel(res, self.selection)
 
         elif is_int(value):
             return self.read(value)
@@ -1547,10 +1578,17 @@ class sql_cursor(object):
             statement = statement.where(self.spec)
         if self.order is not None:
             order = self.order
-            cols = self.table.columns
+            cols = _get_columns(self._table)
             if isinstance(order, (str,list)):
-                order = {o: 1 for o in as_list(order)}           
-            statement = statement.order_by(*[_orders[v](cols[k]) for k, v in order.items()])
+                order = {o: 1 for o in as_list(order)}
+            order_by = []
+            for k, v in order.items():
+                col = cols[k.lower()]
+                if len(col) > 1:
+                    raise ValueError(f'cannot sort as multiple col {k} in join: {col}')
+                else:
+                    order_by.append(_orders[v](col[0]))
+            statement = statement.order_by(*order_by)
         return statement
     
     def update(self, **kwargs):
@@ -1596,7 +1634,8 @@ class sql_cursor(object):
             res.full_delete()
         return self
 
-    def sort(self, order = None):
+    def sort(self, *order):
+        order = as_list(order)
         if not order:
             return self
         else:

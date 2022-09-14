@@ -30,18 +30,60 @@ _types = {str: String, 'str' : String,
 
 _orders = {1 : asc, True: asc, 'asc': asc, asc : asc, -1: desc, False: desc, 'desc': desc, desc: desc}
 
-def _relabel(res, selection):
+def _relabel(res, selection, strict = True):
+    """
+    selection defines the CASE we want the columns to be in
+    We convert either columns or dicts into the case from 
+
+    Parameters
+    ----------
+    res : pd.DataFrame/dict
+        original value
+    selection : str/list of str
+        columnes/keys in the case we want them
+    strict : bool, optional
+        if False, will replace opportunistically. If True, needs all res & selection to match. The default is True.
+
+    Returns
+    -------
+    pd.DataFrame/dict
+        same object with case matching
+        
+    Example
+    -------
+    >>> res = dict(a = 1, b = 2, c = 3)
+    >>> selection  = ['A', 'B']
+    >>> assert _relabel(res, selection) == res                  ## no replacement, strict
+    >>> assert _relabel(res, selection, strict = False) == dict(A = 1, B = 2, c = 3) ## replaceme what is possible
+    >>> assert _relabel(res, ['A', 'B', 'C']) == dict(A = 1, B = 2, C = 3)
+    >>> assert _relabel(res, ['A', 'B', 'C'], True) == dict(A = 1, B = 2, C = 3)
+
+    """
     if not is_strs(selection):
-        return res       
+        return res
     lower_selection = lower(as_list(selection))
-    if lower_selection == selection:
+    if isinstance(res, pd.DataFrame):
+        columns = list(res.columns)
+        if columns == selection:
+            return res
+        if lower(list(res.columns)) == lower_selection:
+            res.columns = selection
+        elif not strict:
+            lower2selection = dict(zip(lower_selection, selection))
+            res.columns = [lower2selection.get(col.lower(),col) for col in res.columns]    
         return res
-    if isinstance(res, pd.DataFrame) and lower(list(res.columns)) == lower_selection:
-        res.columns = selection
-        return res
-    elif isinstance(res, dict) and sorted(lower(list(res.keys()))) == sorted(lower_selection):
-        lower2selection = dict(zip(lower_selection, selection))
-        return type(res)({lower2selection[key.lower()] : value for key, value in res.items()})
+    elif isinstance(res, dict):
+        if strict and sorted(lower(list(res.keys()))) == sorted(lower_selection):
+            columns = res.keys()
+            if sorted(columns) == sorted(selection): ## nothing to do
+                return res
+            lower2selection = dict(zip(lower_selection, selection))
+            return type(res)({lower2selection[key.lower()] : value for key, value in res.items()})
+        elif not strict:
+            lower2selection = dict(zip(lower_selection, selection))
+            return type(res)({lower2selection.get(key.lower(), key): value for key, value in res.items()})
+        else:
+            return res            
     else:
         return res       
 
@@ -494,10 +536,13 @@ class sql_cursor(object):
     ------------------------------------
     >>> from pyg_sql import *
     >>> t = sql_table(db = 'test', table = 'case_insensitive', nullable = dict(number = int, text = str))
-    >>> t.delete()
-    >>> t.insert(dict(number = 1, text = 'world'))
-    >>> t.insert(dict(number = 2, text = 'hello'))
-    
+    >>> self = t.delete()
+
+    When we insert, we convert the case to the database columns convention:
+        
+    >>> assert t.insert_one(doc = dict(NUMBER = 1, TEXT = 'world')) == {'number': 1, 'text': 'world'}
+    >>> assert t.insert_one(dict(Number = 2, Text = 'hello')) == {'number': 2, 'text': 'hello'}
+
     When we access the columns without specification, we get the database column names
     
     >>> assert t[0] == {'number': 1, 'text': 'world'}
@@ -508,7 +553,7 @@ class sql_cursor(object):
 
     assert t.sort('TEXT')[0] == {'number': 2, 'text': 'hello'}
 
-    When we select, we can use any case, and key-case will follow your selection case:
+    When we SELECT, we can use any case, and key-case will follow your cursor.selection case:
         
     >>> assert t[['NUMBER','TexT']][0] == {'NUMBER': 1, 'TexT': 'world'}
     >>> assert list(t[['Number','Text']].df().columns) == ['Number', 'Text']
@@ -1121,6 +1166,7 @@ class sql_cursor(object):
             Suppose you have a document with EXTRA keys. Rather than filter the document, set ignore_bad_keys = True and we will drop irrelevant keys for you
 
         """
+        doc = _relabel(res = doc, selection = self.columns, strict = False) ## we want to replace what is possible since 
         edoc = self._dock(doc) if write else doc
         columns = self.columns
         if not ignore_bad_keys:
@@ -1425,6 +1471,7 @@ class sql_cursor(object):
         elif self._pk:
             return self.insert_one(doc)
         elif n == 1:
+            doc = _relabel(doc, self.columns, strict = False)
             edoc = self._dock(doc)
             wdoc = self._write_doc(edoc)
             for i in self._ids:
@@ -1447,6 +1494,7 @@ class sql_cursor(object):
         docs : list of dicts, dictable, pd.DataFrame
         """
         rs = dictable(docs)
+        rs = _relabel(rs, self.columns, strict = False)
         if len(rs) > 0:
             if self._pk and not self._is_deleted():
                 _ = [self.insert_one(doc, write = write) for doc in rs]

@@ -1264,7 +1264,7 @@ class sql_cursor(object):
             return Dict(doc) if type(doc) == dict else doc
         res = doc[self.doc]
         columns = columns or self.columns
-        for col in columns - self.doc:
+        for col in ulist(columns) - self.doc:
             if col in doc and col not in res:
                 res[col] = doc[col]
         return Dict(res) if type(res) == dict else res

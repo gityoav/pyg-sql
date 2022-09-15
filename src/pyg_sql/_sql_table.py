@@ -1,6 +1,6 @@
 import sqlalchemy as sa
 from sqlalchemy_utils.functions import create_database
-from pyg_base import cache, cfg_read, as_list, dictable, lower, last, loop, replace, Dict, is_dict, is_dictable, is_strs, is_str, is_int, is_date, dt2str, ulist, try_back, unique
+from pyg_base import cache, cfg_read, as_list, dictable, lower, last, loop, replace, Dict, is_dict, is_dictable, is_strs, is_str, is_int, is_date, dt2str, ulist, try_back, unique, is_primitive
 from pyg_encoders import as_reader, as_writer, dumps, loads
 from sqlalchemy import Table, Column, Integer, String, MetaData, Identity, Float, DATE, DATETIME, TIME, select, func, not_, desc, asc
 from sqlalchemy.orm import Session
@@ -1151,8 +1151,17 @@ class sql_cursor(object):
             for m in missing:
                 if m in doc:
                     missing[m].append(doc[m])
-        found = {k : v[0] for k, v in missing.items() if len(set(v)) == 1}
-        conflicted = {k : v for k, v in missing.items() if len(set(v)) > 1}
+        found = {}
+        conflicted = {}
+        for k, v in missing.items():
+            if len(v) == 1:
+                found[k] = v[0]
+            elif len(v) > 1:
+                p = [i for i in v if is_primitive(i)]
+                if len(set(p)) == 1:
+                    found[k] = p[0]
+                else:
+                    conflicted[k] = v
         if conflicted:
             raise ValueError(f'got multiple possible values for each of these columns: {conflicted}')
         res.update(found)

@@ -1152,7 +1152,7 @@ class sql_cursor(object):
                 if m in doc:
                     missing[m].append(doc[m])
         found = {}
-        conflicted = {}
+        conflicted = {} #
         for k, v in missing.items():
             if len(v) == 1:
                 found[k] = v[0]

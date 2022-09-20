@@ -45,7 +45,7 @@ def sql_binary_store(path):
     schema = _schema(schema or connections.pop('schema', None))
     doc = connections.pop('doc', 'true')
     doc = dict(true = True, false = False).get(doc.lower(), doc)        
-    cursor = sql_table(table = table, db = db, schema = schema, pk = _key, 
+    cursor = sql_table(table = table, db = db, schema = schema, pk = _key, server = server, 
                         non_null = {_data : bin}, doc = doc)
     connections.update(dict(cursor = cursor, path = '%s/%s/%s/%s/%s'%(server, db, schema, table, root),
                             server = server, schema = schema, db = db, table = table, root = root ))

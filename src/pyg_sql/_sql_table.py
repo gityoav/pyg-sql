@@ -1772,7 +1772,6 @@ class sql_cursor(object):
                             writer = self.writer, 
                             reader = self.reader, 
                             schema = schema)
-            res.spec = self.spec
             res.order = self.order
             res.selection = self.selection
             return res

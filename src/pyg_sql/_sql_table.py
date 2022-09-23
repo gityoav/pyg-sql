@@ -1731,6 +1731,12 @@ class sql_cursor(object):
             res = [row[0] for row in res]
         return res
     
+    def __getattr__(self, attr):
+        if attr.lower() in self._columns:
+            return self.distinct(attr)
+        else:
+            return super(sql_cursor, self).__getattr__(attr)
+    
     def __repr__(self):
         statement = self.statement()
         params = statement.compile().params

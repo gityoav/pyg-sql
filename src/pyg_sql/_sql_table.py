@@ -1735,7 +1735,7 @@ class sql_cursor(object):
         if attr.lower() in self._columns:
             return self.distinct(attr)
         else:
-            return super(sql_cursor, self).__getattr__(attr)
+            raise AttributeError(f"'sql_cursor' object has no attribute '{attr}'")
     
     def __repr__(self):
         statement = self.statement()

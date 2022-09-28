@@ -1032,7 +1032,7 @@ class sql_cursor(object):
     def drop(self, deleted = False):
         if self.selection or self.spec:
             raise ValueError('To avoid confusing .delete and .drop, dropping a table can only be done if there is no selection and no filtering')
-        if deleted:
+        if deleted and self._pk:
             self.deleted.drop()
         logger.info('dropping table: %s.%s.%s'%(_database(self.db), 
                                                   self.schema, 
@@ -1778,7 +1778,7 @@ class sql_cursor(object):
 
     @property
     def deleted(self):
-        if self._is_deleted():
+        if self._is_deleted() or len(self._pk) == 0:
             return self
         else:        
             schema = _archived + (self.schema or '')

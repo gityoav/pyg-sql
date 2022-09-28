@@ -8,12 +8,22 @@ from pyg_sql import *
 server = db = schema = None
 import pandas as pd
 import pickle
+import pytest
 
 def drop_table(table, schema = None, db = None, server = None):
     try:
         sql_table(table = table, server = server, db = db, schema = schema).drop()
     except Exception:
         pass
+
+get_engine(db = 'test_db', schema = 'dbo', create = True)
+
+def test_create_parameters():
+    with pytest.raises(ValueError):
+        t = sql_table('test_table', db = 'should_fail_we_did_not_mandate', nullable= dict(a=int, b=str))
+    with pytest.raises(ValueError):
+        get_engine(db = 'should_fail_we_did_not_mandate', schema = 'dbo')
+    
 
 def test_sql_table_base():
     drop_table('test_table', db = 'test_db')

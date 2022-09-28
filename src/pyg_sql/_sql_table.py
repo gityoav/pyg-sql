@@ -129,25 +129,6 @@ def pickle_loads(value):
     else:
         return value
 
-# def _pair_wise_filter(t, k, v):
-#     """
-#     t is a sqlalchemy column.c filter
-#     """
-#     if is_regex(v):
-#         p = v.pattern
-#         if not p.startswith('%'):
-#             p = '%' + p
-#         if not p.endswith('%'):
-#             p = p + '%'
-#         return t[k].like(p)
-#     elif is_str(v) and v.startswith('%') and v.endswith('%'):
-#         return t[k].like(v)
-#     elif isinstance(v, list):
-#         return sa.or_(*[_pair_wise_filter(t, k, i) for i in v])
-#     else:
-#         return t[k] == v
-
-
 
 @cache
 def _servers():
@@ -208,6 +189,7 @@ def get_server(server = None):
         raise ValueError('please provide server or set a "sql_server" in cfg file: from pyg_base import *; cfg = cfg_read(); cfg["sql_server"] = "server"; cfg_write(cfg)')
     return server
 
+
 def get_driver(driver = None):
     """
     determines the sql server driver
@@ -243,6 +225,7 @@ def _pairs2connection(*pairs, **connection):
     connection = {k.lower() : replace(replace(v, ' ','+'),['{','}'],'') for k, v in connection.items() if v is not None}
     return connection
 
+
 def _db(connection):
     db = connection.pop('db', None)
     if db is None:
@@ -250,6 +233,7 @@ def _db(connection):
     db = _database(db)
     return db
     
+
 def get_cstr(*pairs, **connection):
     """
     determines the connection string
@@ -265,12 +249,15 @@ def get_cstr(*pairs, **connection):
         return 'mssql+pyodbc://%(server)s/%(db)s%(params)s'%dict(server=server, db = db, params = '?' +params if params else '')
 
 
-def create_schema(engine, schema):
+def create_schema(engine, schema, create):
     if schema is None:
         return
     try:
         if schema not in engine.dialect.get_schema_names(engine):
-            engine.execute(sa.schema.CreateSchema(schema))
+            if create is True or (is_str(create) and ('s' in create.lower() or 'd' in create.lower())):
+                engine.execute(sa.schema.CreateSchema(schema))
+            else:
+                raise ValueError(f'Schema {schema} does not exist. You have to explicitly mandata the creation of a schema by setting create=True or create="d" or create="s"')
             logger.info('creating schema: %s'%schema)
     except AttributeError: #MS SQL vs POSTGRES
         if not engine.dialect.has_schema(engine, schema):
@@ -283,6 +270,7 @@ def create_schema(engine, schema):
 def _get_engine(*pairs, **connection):    
     connection = _pairs2connection(*pairs, **connection)
     server = get_server(connection.pop('server', None))
+    create = connection.pop('create', False)
     connection['driver'] = get_driver(connection.pop('driver', None))
     db = _db(connection)    
     if isinstance(server, sa.engine.base.Engine):
@@ -292,8 +280,11 @@ def _get_engine(*pairs, **connection):
     try:
         sa.inspect(e)
     except Exception:
-        logger.info('creating database: %s'%db)
-        create_database(cstr)
+        if create is True or (is_str(create) and 'd' in create.lower()):
+            create_database(cstr)
+            logger.info('creating database: %s'%db)
+        else:
+            raise ValueError('You have to explicitly permission the creation of the database by setting create = True or create ="d"')
         e = sa.create_engine(cstr)       
     return e
 
@@ -309,8 +300,8 @@ def get_engine(*pairs, **connection):
 
 
 @cache
-def _get_table(table_name, schema, db, server):
-    e = _get_engine(server = server, db = db, schema = schema)
+def _get_table(table_name, schema, db, server, create):
+    e = _get_engine(server = server, db = db, schema = schema, create = create)
     meta = MetaData()
     return Table(table_name, meta, autoload_with = e, schema = schema)
 
@@ -319,7 +310,7 @@ def _get_table(table_name, schema, db, server):
 
 def sql_table(table, db = None, non_null = None, nullable = None, _id = None, schema = None, 
               server = None, reader = None, writer = None, pk = None, doc = None, mode = None, 
-              spec = None, selection = None, order = None, joint = None):
+              spec = None, selection = None, order = None, joint = None, create = None):
     """
     Creates a sql table. Can also be used to simply read table from the db
 
@@ -349,6 +340,26 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         If you want the DOCUMENT (a dict of stuff) to be saved to a single column, specify.
     mode : int, optional
         NOT IMPLEMENTED CURRENTLY
+    spec : sqlalchemy selection object
+        can specify a filter on the resulting data, applied in a WHERE
+    selection: None/str/list(str)
+        can specify column selection in a SELECT statement
+    order: dict/str/liststr
+        can specifiy a SORT statement
+    joint: a list of tuples:
+        Each tuple contains the object to join the table with, as well as the other parameters used in a sql alchemy join statement 
+    create: bool/str
+        Creation policy. The "mongo" document store policy is to create a database on the fly.
+        Here the policy is more nuanced:
+        'd' or True : will create the database, the schema and the table if needed
+        's'         : will create a schema & table if database exists but if database doesn't, will throw
+        't'         : will create a table if db & schema exists and will throw if either db or schema are missing
+        '' or False : will throw
+        if create is None:
+            if no nullable and no non_null and doc is False:
+                create = False
+            else:
+                create = 's'
 
     Returns
     -------
@@ -400,9 +411,10 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         writer = table.keywords.get('writer') if writer is None else writer
         doc = table.keywords.get('doc') if doc is None else doc
         table = table.keywords['table']
-        
-    e = _get_engine(server = server, db = db, schema = schema)
     
+    ### we resolve some parameters
+    if doc is True: #user wants a doc
+        doc = _doc
     non_null = non_null or {}
     nullable = nullable or {}
     pks = pk or {}
@@ -425,49 +437,57 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         table_name = table.name
         if schema is None:
             schema = table.schema
-    schema = create_schema(e, _schema(schema))
-    if doc is True: #user wants a doc
-        doc = _doc
+
+    ## do we have any columns in table?
+    cols = []
+    if isinstance(table, sa.sql.schema.Table):
+        for col in table.columns:
+            col = copy(col)
+            del col.table
+            cols.append(col)
+    if _id is not None:
+        if isinstance(_id, str):
+            _id = {_id : int}
+        if isinstance(_id, list):
+            _id = {i : int for i in _id}
+        for i, t in _id.items():
+            if i not in [col.name for col in cols]:
+                if t == int:                    
+                    cols.append(Column(i, Integer, Identity(always = True)))
+                elif t == datetime.datetime:
+                    cols.append(Column(i, DATETIME(timezone=True), nullable = False, server_default=func.now()))
+                else:
+                    raise ValueError('not sure how to create an automatic item with column %s'%t)
+
+    col_names = [col.name for col in cols]
+    non_nulls = [Column(k, _types.get(t, t), nullable = False) for k, t in pks.items() if k not in col_names]
+    nullables = [Column(k.lower(), _types.get(t, t)) for k, t in nullable.items() if k not in col_names] 
+    docs = [Column(doc, String, nullable = True)] if doc else []
+    cols = cols + non_nulls + nullables + docs
+
+    ## creation logic:
+    if create is None:
+        create = 's' if len(cols) else False
+
+    ## time to access/create tables    
+    e = _get_engine(server = server, db = db, schema = schema, create = create)    
+    schema = create_schema(e, _schema(schema), create = create)
     try:
-        tbl = _get_table(table_name, schema, db, server) ## by default we grab the existing table
+        tbl = _get_table(table_name = table_name, schema = schema, db = db, server = server, create = create) ## by default we grab the existing table
         if doc is None and _doc in [col.name for col in tbl.columns]:
             doc = _doc
     except sa.exc.NoSuchTableError:        
         if doc is None and len(non_null) == 0 and len(nullable) == 0: #user specified nothing but pk so assume table should contain SOMETHING :-)
             doc = _doc
         meta = MetaData()
-        # i = sa.inspect(e)
-        # if not i.has_table(table_name, schema = schema):
-        cols = []
-        if isinstance(table, sa.sql.schema.Table):
-            for col in table.columns:
-                col = copy(col)
-                del col.table
-                cols.append(col)
-        if _id is not None:
-            if isinstance(_id, str):
-                _id = {_id : int}
-            if isinstance(_id, list):
-                _id = {i : int for i in _id}
-            for i, t in _id.items():
-                if i not in [col.name for col in cols]:
-                    if t == int:                    
-                        cols.append(Column(i, Integer, Identity(always = True)))
-                    elif t == datetime.datetime:
-                        cols.append(Column(i, DATETIME(timezone=True), nullable = False, server_default=func.now()))
-                    else:
-                        raise ValueError('not sure how to create an automatic item with column %s'%t)
-
-        col_names = [col.name for col in cols]
-        non_nulls = [Column(k, _types.get(t, t), nullable = False) for k, t in pks.items() if k not in col_names]
-        nullables = [Column(k.lower(), _types.get(t, t)) for k, t in nullable.items() if k not in col_names] 
-        docs = [Column(doc, String, nullable = True)] if doc else []
-        cols = cols + non_nulls + nullables + docs
         if len(cols) == 0:
             raise ValueError('You seem to be trying to create a table with no columns? Perhaps you are trying to point to an existing table and getting its name wrong?')
-        logger.info('creating table: %s.%s.%s%s'%(db, schema, table_name, [col.name for col in cols]))
-        tbl = Table(table_name, meta, *cols, schema = schema)
-        meta.create_all(e)
+        if create is True or (is_str(create) and ('t' in create.lower() or 's' in create.lower() or 'd' in create.lower())):
+            logger.info('creating table: %s.%s.%s%s'%(db, schema, table_name, [col.name for col in cols]))
+            tbl = Table(table_name, meta, *cols, schema = schema)            
+            meta.create_all(e)
+        else:
+            raise ValueError(f'table {table_name} does not exist. You need to explicitly set create=True or create="t/s/d" to mandate table creation')
     res = sql_cursor(table = tbl, schema = schema, db = db, server = server, engine = e, 
                      reader = reader, writer = writer, 
                      pk = list(pk) if isinstance(pk, dict) else pk, doc = doc,
@@ -1772,6 +1792,7 @@ class sql_cursor(object):
                             writer = self.writer, 
                             reader = self.reader, 
                             schema = schema)
+            #res.spec = self.spec THIS NEEDS TO BE IMPLEMENTED PROPERLY
             res.order = self.order
             res.selection = self.selection
             return res

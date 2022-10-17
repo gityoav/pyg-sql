@@ -1,4 +1,4 @@
-from pyg_sql import sql_table, sql_cursor, get_engine
+from pyg_sql import sql_table, sql_cursor, get_engine, create_schema
 import sqlalchemy as sa
 import pytest
 from functools import partial
@@ -97,10 +97,17 @@ def test_writable_doc_store_save_and_read():
     doc = t.deleted.inc(key = key)[0]
     eq(doc - 'deleted', docs[0])
 
-sql_table('test_table', server = True, db = 'test_db', schema = 'archived_test')[0]['doc']
 
-t.deleted.reset
-doc.data
-docs[0].data
-    t.deleted.drop()
-    t.drop()
+def test_archive_does_not_update():
+    from pyg import *
+    table = sql_table(db = 'test_db', schema = 'dbo', table = 'data', pk = 'item', doc = True,
+                      writer = '/test_db/dbo/datas/%item.sql'
+                      )
+    
+    table.update_one(db_cell(item = 'a', ts = pd.Series([1,2,3], [4,5,6]), b = 1))
+    table.update_one(db_cell(item = 'a', ts = pd.Series([1,2,4], [4,5,6]), b = 2))
+    table.update_one(db_cell(item = 'a', ts = pd.Series([0,0,0], [4,5,6]), b = 3))
+
+    table.deleted[1]
+    
+    table.drop(True)

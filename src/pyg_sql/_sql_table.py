@@ -18,6 +18,7 @@ _root = 'root'
 _deleted = 'deleted'
 _archived = 'archived_'
 _pd_is_old = pd.__version__.startswith('0')
+from pyg_base._bitemporal import _asof
 
 _types = {str: String, 'str' : String, 
           int : Integer, 'int' : Integer,
@@ -137,6 +138,7 @@ def _servers():
         res[None] = res.get('null')
         res[True] = res.get('true')
         res[False] = res.get('false')
+        res['None'] = res.get('None', res[None])
     return res
 
 @cache
@@ -1213,7 +1215,7 @@ class sql_cursor(object):
             res_no_ids = type(res)({k : v for k, v in res.items() if k not in ids}) if ids else res
             tbl = self.inc().inc(**doc_id)
             read = tbl.sort(ids)._read_statement() ## row format
-            docs = tbl._rows_to_docs(reader = False, load = False, **read) ## do not transform the document, keep in raw format
+            docs = tbl._rows_to_docs(reader = False, load = False, **read) ## do not transform the document, keep in raw format?
             if len(docs) == 0:
                 with self.engine.connect() as conn: 
                     conn.execute(self.table.insert(),[res_no_ids])
@@ -1705,6 +1707,7 @@ class sql_cursor(object):
             if self._pk and not self._is_deleted(): ## we first copy the existing data out to deleted db
                 read = self._read_statement() 
                 docs = self._rows_to_docs(reader = False, load = False, **read)
+                #docs = self._rows_to_docs(load = True, **read)
                 deleted = datetime.datetime.now()
                 for doc in docs:
                     doc[_deleted] = deleted
@@ -1780,16 +1783,22 @@ class sql_cursor(object):
     def deleted(self):
         if self._is_deleted() or len(self._pk) == 0:
             return self
-        else:        
+        else:
             schema = _archived + (self.schema or '')
             # logger.info('archived schema: %s'%schema)
+            writer = self.writer
+            if is_str(writer) and writer.endswith('.sql'):
+                params = writer.split('/')
+                params[2] = schema
+                writer = '/'.join(params)
+                writer = writer.replace('.sql','/%deleted.sql')
             res = sql_table(table = self.table, 
                             db = self.db, 
                             non_null = dict(deleted = datetime.datetime), 
                             server = self.server, 
-                            pk = self.pk, 
+                            pk = self._pk + [_deleted], 
                             doc = self.doc, 
-                            writer = self.writer, 
+                            writer = writer, 
                             reader = self.reader, 
                             schema = schema)
             #res.spec = self.spec THIS NEEDS TO BE IMPLEMENTED PROPERLY

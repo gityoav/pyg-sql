@@ -86,6 +86,9 @@ def sql_dumps(obj, path):
     # print(cursor)
     return res.path
 
+
+    
+
 def sql_loads(path):
     res = sql_binary_store(path)
     cursor = res.cursor

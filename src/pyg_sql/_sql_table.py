@@ -1,7 +1,7 @@
 import sqlalchemy as sa
 from sqlalchemy_utils.functions import create_database
 from pyg_base import cache, cfg_read, as_list, dictable, lower, last, loop, replace, Dict, is_dict, is_dictable, is_strs, is_str, is_int, is_date, dt2str, ulist, try_back, unique, is_primitive
-from pyg_encoders import as_reader, as_writer, dumps, loads
+from pyg_encoders import as_reader, as_writer, dumps, loads, encode
 from sqlalchemy import Table, Column, Integer, String, MetaData, Identity, Float, DATE, DATETIME, TIME, select, func, not_, desc, asc
 from sqlalchemy.orm import Session
 from sqlalchemy.types import NUMERIC, FLOAT, INT
@@ -117,7 +117,10 @@ def _pw_filter(col, v):
         return sa.or_(*[_pw_filter(col, i) for i in v])
     else:
         return col == v
-    
+
+@loop(list)
+def _like_within_doc(v, k):
+    return '%' + dumps(encode({k : v}))[1:-1] + '%'
 
 
 def pickle_loads(value):
@@ -918,6 +921,41 @@ class sql_cursor(object):
 
 
     def _kw(self, **kwargs):
+        """
+        converts kwargs dict into a sqlalchemy filtering expression
+        usually, we just use the column names
+        If the table is a document store and the key is not in the table columns, we assume the user wants to filter within the documnet
+        This is a little bit of a hack since we encode all documents but works quite well for simple queries
+        
+        Example: query within a document store
+        --------
+        >>> from pyg import * 
+        >>> table = partial(sql_table, db = 'test_db', schema = 'dbo', table = 'hello', nullable = 'a', pk = 'b', doc = True)
+        >>> c = db_cell(a = 'a', b = 'b', ccy = 'USD', asset = 'bond', db = table)()
+        >>> d = db_cell(a = 'b', b = 'c', ccy = 'EUR', asset = 'bond', db = table)()
+        >>> e = db_cell(a = 'a', b = 'd', ccy = 'EUR', asset = 'bond', db = table)()
+
+        >>> self = table()
+        >>> assert len(self.inc(ccy = ['USD','EUR'])) == 3
+        >>> assert len(self.inc(ccy = ['USD'])) == 1
+        >>> assert len(self.inc(ccy = 'EUR')) == 2
+
+
+        Example: query for a date within a doc store
+        --------------------------------------------
+        >>> from pyg import * 
+        >>> import datetime
+        >>> table = partial(sql_table, db = 'test_db', schema = 'dbo', table = 'dates', nullable = dict(a = datetime.datetime), pk = 'b', doc = True)
+        >>> c = db_cell(a = dt(2000), b = 'b', ccy = dt(2000), asset = 'bond', db = table)()
+        >>> d = db_cell(a = dt(2010), b = 'c', ccy = dt(2010), asset = 'bond', db = table)()
+        >>> e = db_cell(a = dt(2020), b = 'd', ccy = 3, asset = 'bond', db = table)()
+
+        >>> self = table()
+        >>> assert len(self.inc(ccy = dt(2000))) == 1
+        >>> assert len(self.inc(ccy = [dt(2000), dt(2010)])) == 2
+        >>> assert len(self.inc(ccy = 3)) == 1
+        
+        """
         columns = _get_columns(self._table)
         conditions = []
         for k, v in kwargs.items():
@@ -929,6 +967,10 @@ class sql_cursor(object):
                 else:
                     col = col[0]
                 conditions.append(_pw_filter(col, v))
+            elif self.doc:
+                col = columns[self.doc][0]
+                vs = _like_within_doc(v, k)
+                conditions.append(_pw_filter(col, vs))
             else:
                 raise ValueError(f'column {k} not found')
         return sa.and_(*conditions)
@@ -940,6 +982,7 @@ class sql_cursor(object):
         
         :Example:
         ---------
+        
         >>> expression = dict(a = 1, b = 2)
         >>> assert t._c(expression) == sa.and_(t.c.a == 1, t.c.b == 2)
         c = table.insert_many(dictable(a = ['a','aa','b', 'c'], b = ['bb','b1','c','d']))
@@ -1201,7 +1244,7 @@ class sql_cursor(object):
             Suppose you have a document with EXTRA keys. Rather than filter the document, set ignore_bad_keys = True and we will drop irrelevant keys for you
 
         """
-        doc = _relabel(res = doc, selection = self.columns, strict = False) ## we want to replace what is possible since 
+        doc = _relabel(res = doc, selection = self.columns, strict = False) ## we want to replace what is possible
         edoc = self._dock(doc) if write else doc
         columns = self.columns
         if not ignore_bad_keys:

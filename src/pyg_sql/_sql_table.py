@@ -935,13 +935,15 @@ class sql_cursor(object):
 
         """        
         if valid_connection(self.connection): ## we are within context
-            return self.connection.execute(statement, *args, **kwargs)
+            res = self.connection.execute(statement, *args, **kwargs)
+            if transform:
+                res = transform(res)
         else:
             with self.engine.connect() as connection:
                 res = connection.execute(statement, *args, **kwargs)
                 if transform:
                     res = transform(res)
-            return res
+        return res
     
     def __enter__(self):
         if not valid_connection(self.connection):
@@ -954,6 +956,8 @@ class sql_cursor(object):
         if valid_connection(self.connection):
             if self.connection.dry_run:
                 self.connection.rollback()
+            else:
+                self.connection.commit()
             self.connection.__exit__(type, value, traceback)
             self.connection = None
         return self

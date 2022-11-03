@@ -899,7 +899,7 @@ class sql_cursor(object):
         """
         if connection is None:
             if not valid_connection(self.connection):
-                self.connection = self.engine.connect()
+                self.connection = Session(self.engine)
         else:
             if not valid_connection(connection):
                 raise ValueError(f'connection provided {connection} is not valid')
@@ -945,7 +945,7 @@ class sql_cursor(object):
     
     def __enter__(self):
         if not valid_connection(self.connection):
-            self.connection = self.engine.connect()
+            self.connection = Session(self.engine)
             self.connection.dry_run = None
         self.connection.__enter__()
         return self
@@ -953,7 +953,7 @@ class sql_cursor(object):
     def __exit__(self, type, value, traceback):
         if valid_connection(self.connection):
             if self.connection.dry_run:
-                self.connection.roll_back()
+                self.connection.rollback()
             self.connection.__exit__(type, value, traceback)
             self.connection = None
         return self

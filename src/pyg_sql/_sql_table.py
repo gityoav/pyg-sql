@@ -1,6 +1,6 @@
 import sqlalchemy as sa
 from sqlalchemy_utils.functions import create_database
-from pyg_base import cache, cfg_read, as_list, dictable, lower, last, loop, replace, Dict, is_dict, is_dictable, is_strs, is_str, is_int, is_date, dt2str, ulist, try_back, unique, is_primitive
+from pyg_base import cache, cfg_read, as_list, dictable, lower, loop, replace, Dict, is_dict, is_dictable, is_strs, is_str, is_int, is_date, dt2str, ulist, try_back, unique, is_primitive
 from pyg_encoders import as_reader, as_writer, dumps, loads, encode
 from sqlalchemy import Table, Column, Integer, String, MetaData, Identity, Float, DATE, DATETIME, TIME, select, func, not_, desc, asc
 from sqlalchemy.orm import Session
@@ -10,7 +10,6 @@ from copy import copy
 from pyg_base import logger, is_regex
 from functools import partial
 import pandas as pd
-import pickle
 
 
 _id = '_id'
@@ -19,7 +18,6 @@ _root = 'root'
 _deleted = 'deleted'
 _archived = 'archived_'
 _pd_is_old = pd.__version__.startswith('0')
-from pyg_base._bitemporal import _asof
 
 _types = {str: String, 'str' : String, 
           int : Integer, 'int' : Integer,

@@ -12,6 +12,7 @@ from functools import partial
 import pandas as pd
 import pickle
 
+
 _id = '_id'
 _doc = 'doc'
 _root = 'root'
@@ -31,6 +32,10 @@ _types = {str: String, 'str' : String,
 
 _orders = {1 : asc, True: asc, 'asc': asc, asc : asc, -1: desc, False: desc, 'desc': desc, desc: desc}
 
+def _data_and_columns(executed):
+    columns = list(executed.keys())
+    data = list(executed)
+    return data, columns
 
 def valid_connection(connection):
     """
@@ -903,7 +908,7 @@ class sql_cursor(object):
             self.connection = connection
         return self
     
-    def execute(self, statement, *args, **kwargs):
+    def execute(self, statement, *args, transform = None, **kwargs):
         """
         executes a statement in two modes:
             if a self.connection exists, it assumes we are within a transaction and will simply execute using connection
@@ -913,6 +918,8 @@ class sql_cursor(object):
         ----------
         statement : sql statement
         
+        Example: committed 
+        --------            
         Example: a simple transactional logic
         --------
         with cursor:
@@ -921,7 +928,7 @@ class sql_cursor(object):
 
         Example: a simple transactional logic with another connection provided
         --------
-        with cursor.connect(myconnection):
+        with cursor.connect(existing_connection):
             cursor.execute(statement)
             cursor.execute(another_statement)
             
@@ -932,6 +939,8 @@ class sql_cursor(object):
         else:
             with self.engine.connect() as connection:
                 res = connection.execute(statement, *args, **kwargs)
+                if transform:
+                    res = transform(res)
             return res
     
     def __enter__(self):
@@ -1253,7 +1262,7 @@ class sql_cursor(object):
         statement = select(func.count()).select_from(self._table)
         if self.spec is not None:
             statement = statement.where(self.spec)
-        return list(self.execute(statement))[0][0]
+        return self.execute(statement, transform = list)[0][0]
     
     count = __len__
 
@@ -1468,9 +1477,7 @@ class sql_cursor(object):
             stop = stop if stop is None else stop - start
         if stop is not None:
             statement = statement.limit(1+stop)
-        executed = self.execute(statement)
-        columns = list(executed.keys())
-        data = list(executed)
+        data, columns = self.execute(statement, transform = _data_and_columns)
         if start is not None or stop is not None or step is not None:
             data = data[slice(start, stop, step)]
         return dict(data = data, columns = columns)
@@ -1513,12 +1520,11 @@ class sql_cursor(object):
 
         """
         statement = self.statement()
-        res = self.execute(statement)
-        columns = list(res.keys())
         if _pd_is_old:
-            res = pd.DataFrame(list(res), columns = columns)
+            data, columns = self.execute(statement, transform = _data_and_columns)
+            res = pd.DataFrame(data, columns = columns)
         else:
-            res = pd.DataFrame(res)
+            res = self.execute(statement, transform = pd.DataFrame)
         if decimal2float:
             for col in res.columns:
                 t = self.table.columns[col].type
@@ -1548,14 +1554,10 @@ class sql_cursor(object):
         value = len(self) + item if item < 0 else item
         statement = self.statement()
         if self.order is None:
-            executed = self.execute(statement.limit(value+1))
-            columns = list(executed.keys())
-            data = list(executed)
+            data, columns = self.execute(statement.limit(value+1), transform = _data_and_columns)
             row = data[value]
         else:
-            executed = self.execute(statement.offset(value).limit(1))
-            columns = list(executed.keys())
-            data = list(executed)
+            data, columns = self.execute(statement.limit(value+1), transform = _data_and_columns)
             row = data[0]
         doc = self._rows_to_docs(data = row, reader = reader, columns = columns)
         rtn = self._undock(doc)

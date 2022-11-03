@@ -893,9 +893,18 @@ class sql_cursor(object):
     def copy(self):
         return type(self)(self)
 
-    def connect(self, connection = None, dry_run = None):
+    def connect(self, dry_run = None, connection = None):
         """
         Creates a valid connection and attach it to the cursor
+        
+        Parameters:
+        -----------
+        dry_run: bool
+            if set to True, when exiting the context, will rollback rather than commit
+        
+        connection: session
+            allows an existing session to be passed from a different context manager
+            
         """
         if connection is None:
             if not valid_connection(self.connection):
@@ -926,9 +935,9 @@ class sql_cursor(object):
             cursor.execute(statement) ## not committed
             cursor.execute(another_statement)
 
-        Example: a simple transactional logic with another connection provided
+        Example: a simple transactional logic for rolling back
         --------
-        with cursor.connect(existing_connection):
+        with cursor.connect(True):
             cursor.execute(statement)
             cursor.execute(another_statement)
             
@@ -946,6 +955,16 @@ class sql_cursor(object):
         return res
     
     def __enter__(self):
+        """
+        context manager entry point, creating an ORM session
+        
+        Example:
+        --------
+        with sql_table(..) as t:
+            t.insert()
+            t.delete()
+            
+        """
         if not valid_connection(self.connection):
             self.connection = Session(self.engine)
             self.connection.dry_run = None
@@ -953,6 +972,16 @@ class sql_cursor(object):
         return self
 
     def __exit__(self, type, value, traceback):
+        """
+        context manager exit point, removing the ORM session
+        
+        Example:
+        --------
+        with sql_table(..) as t:
+            t.insert()
+            t.delete()
+            
+        """
         if valid_connection(self.connection):
             if self.connection.dry_run:
                 self.connection.rollback()

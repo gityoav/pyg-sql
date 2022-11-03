@@ -905,6 +905,7 @@ class sql_cursor(object):
                 raise ValueError(f'connection provided {connection} is not valid')
             self.connection = connection
         return self
+
     
     def execute(self, statement, *args, transform = None, **kwargs):
         """

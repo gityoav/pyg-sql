@@ -893,7 +893,7 @@ class sql_cursor(object):
     def copy(self):
         return type(self)(self)
 
-    def connect(self, connection = None):
+    def connect(self, connection = None, dry_run = None):
         """
         Creates a valid connection and attach it to the cursor
         """
@@ -904,6 +904,7 @@ class sql_cursor(object):
             if not valid_connection(connection):
                 raise ValueError(f'connection provided {connection} is not valid')
             self.connection = connection
+        self.connection.dry_run = dry_run
         return self
 
     
@@ -943,12 +944,16 @@ class sql_cursor(object):
             return res
     
     def __enter__(self):
-        self.connect()
+        if not valid_connection(self.connection):
+            self.connection = self.engine.connect()
+            self.connection.dry_run = None
         self.connection.__enter__()
         return self
 
     def __exit__(self, type, value, traceback):
         if valid_connection(self.connection):
+            if self.connection.dry_run:
+                self.connection.roll_back()
             self.connection.__exit__(type, value, traceback)
             self.connection = None
         return self

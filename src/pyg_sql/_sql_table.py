@@ -31,6 +31,24 @@ _types = {str: String, 'str' : String,
 
 _orders = {1 : asc, True: asc, 'asc': asc, asc : asc, -1: desc, False: desc, 'desc': desc, desc: desc}
 
+
+def valid_connection(connection):
+    """
+    TO DO: How do we check if db connection expired??
+
+    Parameters
+    ----------
+    connection : db connection
+        sql database connection
+
+    Returns
+    -------
+    bool
+        is the connection still valid?
+
+    """
+    return connection is not None
+
 def _relabel(res, selection, strict = True):
     """
     selection defines the CASE we want the columns to be in
@@ -123,15 +141,15 @@ def _like_within_doc(v, k):
     return '%' + dumps(encode({k : v}))[1:-1] + '%'
 
 
-def pickle_loads(value):
-    if isinstance(value, dict):
-        return type(value)({k: pickle_loads(v) for k, v in value.items()})
-    elif isinstance(value, (list, tuple)):
-        return type(value)([pickle_loads(v) for v in value])        
-    elif isinstance(value, bytes):
-        return pickle.loads(value)
-    else:
-        return value
+# def pickle_loads(value):
+#     if isinstance(value, dict):
+#         return type(value)({k: pickle_loads(v) for k, v in value.items()})
+#     elif isinstance(value, (list, tuple)):
+#         return type(value)([pickle_loads(v) for v in value])        
+#     elif isinstance(value, bytes):
+#         return pickle.loads(value)
+#     else:
+#         return value
 
 
 @cache
@@ -297,8 +315,9 @@ def _get_engine(*pairs, **connection):
 def get_engine(*pairs, **connection):
     """
     returns a sqlalchemy engine object
-    accepts either *pairs: 'driver={ODBC Driver 17 for SQL Server}'
-    or keyword arguments that look like driver = 'ODBC Driver 17 for SQL Server'    
+    accepts either 
+    *pairs: 'driver={ODBC Driver 17 for SQL Server}' or
+    **connection: keyword arguments that look like driver = 'ODBC Driver 17 for SQL Server'    
     """
     return _get_engine(*pairs, **connection)
     
@@ -802,7 +821,7 @@ class sql_cursor(object):
     >>> assert list(read_from_db.salary.values) == [100, 200, 300]
     >>> assert list(read_from_file.values) == [100, 200, 300]
     """
-    def __init__(self, table, schema = None, db = None, engine = None, server = None, 
+    def __init__(self, table, schema = None, db = None, engine = None, server = None, connection = None,
                  spec = None, selection = None, order = None, joint = None, reader = None, writer = None, 
                  pk = None, doc = None, **_):
         """
@@ -818,6 +837,8 @@ class sql_cursor(object):
             The sqlalchemy engine
         server : str , optional
             The server for the engine. If none, uses the default in pyg config file
+        connection: db connection, optional
+            An uncommitted connection
         spec : sa.Expression, optional
             The "where" statement
         selection : str/list of str, optional
@@ -839,6 +860,7 @@ class sql_cursor(object):
             db = table.db if db is None else db
             engine = table.engine if engine is None else engine
             server = table.server if server is None else server
+            connection = table.connection if connection is None else connection
             spec = table.spec if spec is None else spec
             selection = table.selection if selection is None else selection
             schema = table.schema if schema is None else schema
@@ -855,6 +877,7 @@ class sql_cursor(object):
         self.db = db
         self.server = server
         self.engine = engine or get_engine(db = self.db, server = self.server)
+        self.connection = connection
         self.spec = spec
         self.selection = selection
         self.order = order
@@ -867,7 +890,65 @@ class sql_cursor(object):
     def copy(self):
         return type(self)(self)
 
+    def connect(self, connection = None):
+        """
+        Creates a valid connection and attach it to the cursor
+        """
+        if connection is None:
+            if not valid_connection(self.connection):
+                self.connection = self.engine.connect()
+        else:
+            if not valid_connection(connection):
+                raise ValueError(f'connection provided {connection} is not valid')
+            self.connection = connection
+        return self
     
+    def execute(self, statement, *args, **kwargs):
+        """
+        executes a statement in two modes:
+            if a self.connection exists, it assumes we are within a transaction and will simply execute using connection
+            if self.connection is None, it assumes we basically want to lock and load... will execute and commit
+
+        Parameters
+        ----------
+        statement : sql statement
+        
+        Example: a simple transactional logic
+        --------
+        with cursor:
+            cursor.execute(statement) ## not committed
+            cursor.execute(another_statement)
+
+        Example: a simple transactional logic with another connection provided
+        --------
+        with cursor.connect(myconnection):
+            cursor.execute(statement)
+            cursor.execute(another_statement)
+            
+
+        """        
+        if valid_connection(self.connection): ## we are within context
+            return self.connection.execute(statement, *args, **kwargs)
+        else:
+            with self.engine.connect() as connection:
+                res = connection.execute(statement, *args, **kwargs)
+            return res
+    
+    def __enter__(self):
+        self.connect()
+        self.connection.__enter__()
+        return self
+
+    def __exit__(self, type, value, traceback):
+        if valid_connection(self.connection):
+            self.connection.__exit__(type, value, traceback)
+            self.connection = None
+        return self
+    
+    def __del__(self):
+        if valid_connection(self.connection):
+            self.connection.__del__()
+        
     @property
     def _ids(self):
         """
@@ -912,7 +993,6 @@ class sql_cursor(object):
         """
         ids = self._ids
         return sorted([c.name for c in self.tbl.columns if c.nullable is False and c.name not in ids])
-
 
     @property
     def _columns(self):
@@ -1173,7 +1253,7 @@ class sql_cursor(object):
         statement = select(func.count()).select_from(self._table)
         if self.spec is not None:
             statement = statement.where(self.spec)
-        return list(self.engine.connect().execute(statement))[0][0]
+        return list(self.execute(statement))[0][0]
     
     count = __len__
 
@@ -1260,8 +1340,7 @@ class sql_cursor(object):
             read = tbl.sort(ids)._read_statement() ## row format
             docs = tbl._rows_to_docs(reader = False, load = False, **read) ## do not transform the document, keep in raw format?
             if len(docs) == 0:
-                with self.engine.connect() as conn: 
-                    conn.execute(self.table.insert(),[res_no_ids])
+                self.execute(self.table.insert(),[res_no_ids])
                 if ids:    
                     latest = tbl[0]
                     doc.update(latest[ids])
@@ -1282,8 +1361,7 @@ class sql_cursor(object):
                 self.inc(self._id(latest)).update(**(res_no_ids))
                 doc.update(latest[ids])
         else:
-            with self.engine.connect() as conn:
-                conn.execute(self.table.insert(), [res])
+            self.execute(self.table.insert(), [res])
         return doc
     
     
@@ -1390,12 +1468,13 @@ class sql_cursor(object):
             stop = stop if stop is None else stop - start
         if stop is not None:
             statement = statement.limit(1+stop)
-        executed = self.engine.connect().execute(statement)
+        executed = self.execute(statement)
         columns = list(executed.keys())
         data = list(executed)
         if start is not None or stop is not None or step is not None:
             data = data[slice(start, stop, step)]
         return dict(data = data, columns = columns)
+    
     
     def df(self, decimal2float = True):
         """
@@ -1434,7 +1513,7 @@ class sql_cursor(object):
 
         """
         statement = self.statement()
-        res = self.engine.connect().execute(statement)
+        res = self.execute(statement)
         columns = list(res.keys())
         if _pd_is_old:
             res = pd.DataFrame(list(res), columns = columns)
@@ -1469,12 +1548,12 @@ class sql_cursor(object):
         value = len(self) + item if item < 0 else item
         statement = self.statement()
         if self.order is None:
-            executed = self.engine.connect().execute(statement.limit(value+1))
+            executed = self.execute(statement.limit(value+1))
             columns = list(executed.keys())
             data = list(executed)
             row = data[value]
         else:
-            executed = self.engine.connect().execute(statement.offset(value).limit(1))
+            executed = self.execute(statement.offset(value).limit(1))
             columns = list(executed.keys())
             data = list(executed)
             row = data[0]
@@ -1583,8 +1662,7 @@ class sql_cursor(object):
                     rows = [self._write_doc(row, columns = columns) for row in rows]
                 else:
                     rows = list(rs)
-                with self.engine.connect() as conn:
-                    conn.execute(self.table.insert(), rows)
+                self.execute(self.table.insert(), rows)
         return self
 
     def __iter__(self):
@@ -1724,8 +1802,7 @@ class sql_cursor(object):
         if self.spec is not None:
             statement = statement.where(self.spec)
         statement = statement.values(kwargs)
-        with self.engine.connect() as conn:
-            conn.execute(statement)
+        self.execute(statement)
         return self
     
     set = update
@@ -1739,8 +1816,7 @@ class sql_cursor(object):
         statement = self.table.delete()
         if self.spec is not None:
             statement = statement.where(self.spec)
-        with self.engine.connect() as conn:
-            conn.execute(statement)
+        self.execute(statement)
         return self
 
     def delete(self, **kwargs):

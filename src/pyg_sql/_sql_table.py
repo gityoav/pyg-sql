@@ -35,22 +35,22 @@ def _data_and_columns(executed):
     data = list(executed)
     return data, columns
 
-def valid_connection(connection):
+def valid_session(session):
     """
     TO DO: How do we check if db connection expired??
 
     Parameters
     ----------
-    connection : db connection
-        sql database connection
+    session : db session
+        sql database session
 
     Returns
     -------
     bool
-        is the connection still valid?
+        is the session still valid?
 
     """
-    return connection is not None
+    return session is not None
 
 def _relabel(res, selection, strict = True):
     """
@@ -824,7 +824,7 @@ class sql_cursor(object):
     >>> assert list(read_from_db.salary.values) == [100, 200, 300]
     >>> assert list(read_from_file.values) == [100, 200, 300]
     """
-    def __init__(self, table, schema = None, db = None, engine = None, server = None, connection = None,
+    def __init__(self, table, schema = None, db = None, engine = None, server = None, session = None,
                  spec = None, selection = None, order = None, joint = None, reader = None, writer = None, 
                  pk = None, doc = None, **_):
         """
@@ -840,8 +840,8 @@ class sql_cursor(object):
             The sqlalchemy engine
         server : str , optional
             The server for the engine. If none, uses the default in pyg config file
-        connection: db connection, optional
-            An uncommitted connection
+        session: db session, optional
+            An uncommitted session
         spec : sa.Expression, optional
             The "where" statement
         selection : str/list of str, optional
@@ -863,7 +863,7 @@ class sql_cursor(object):
             db = table.db if db is None else db
             engine = table.engine if engine is None else engine
             server = table.server if server is None else server
-            connection = table.connection if connection is None else connection
+            session = table.session if session is None else session
             spec = table.spec if spec is None else spec
             selection = table.selection if selection is None else selection
             schema = table.schema if schema is None else schema
@@ -880,7 +880,7 @@ class sql_cursor(object):
         self.db = db
         self.server = server
         self.engine = engine or get_engine(db = self.db, server = self.server)
-        self.connection = connection
+        self.session = session
         self.spec = spec
         self.selection = selection
         self.order = order
@@ -893,35 +893,36 @@ class sql_cursor(object):
     def copy(self):
         return type(self)(self)
 
-    def connect(self, dry_run = None, connection = None):
+    def connect(self, dry_run = None, session_maker = None):
         """
-        Creates a valid connection and attach it to the cursor
+        Creates a valid session and attach it to the cursor
         
         Parameters:
         -----------
         dry_run: bool
             if set to True, when exiting the context, will rollback rather than commit
         
-        connection: session
-            allows an existing session to be passed from a different context manager
+        session_maker: callable
+            a function that takes an engine and return a session-like object.
+            This allows user to implement their own logging etc. 
+            The resulting session must support 
+            * commit, rollback and execute
+            * context management (i.e. implement __enter__ and __exit__)            
             
         """
-        if connection is None:
-            if not valid_connection(self.connection):
-                self.connection = Session(self.engine)
-        else:
-            if not valid_connection(connection):
-                raise ValueError(f'connection provided {connection} is not valid')
-            self.connection = connection
-        self.connection.dry_run = dry_run
+        if session_maker is None:
+            session_maker = Session
+        if not valid_session(self.session):
+            self.session = session_maker(self.engine)
+        self.session.dry_run = dry_run
         return self
 
     
     def execute(self, statement, *args, transform = None, **kwargs):
         """
         executes a statement in two modes:
-            if a self.connection exists, it assumes we are within a transaction and will simply execute using connection
-            if self.connection is None, it assumes we basically want to lock and load... will execute and commit
+            if a self.session exists, it assumes we are within a transaction and will simply execute using connection
+            if self.session is None, it assumes we basically want to lock and load... will execute and commit
 
         Parameters
         ----------
@@ -943,8 +944,8 @@ class sql_cursor(object):
             
 
         """        
-        if valid_connection(self.connection): ## we are within context
-            res = self.connection.execute(statement, *args, **kwargs)
+        if valid_session(self.session): ## we are within context
+            res = self.session.execute(statement, *args, **kwargs)
             if transform:
                 res = transform(res)
         else:
@@ -954,6 +955,19 @@ class sql_cursor(object):
                     res = transform(res)
         return res
     
+    def commit(self):
+        if valid_session(self.session):
+            if self.session.dry_run:
+                self.session.rollback()
+            else:
+                self.session.commit()
+        return self
+
+    def rollback(self):
+        if valid_session(self.session):
+            self.session.rollback()
+        return self
+        
     def __enter__(self):
         """
         context manager entry point, creating an ORM session
@@ -965,10 +979,10 @@ class sql_cursor(object):
             t.delete()
             
         """
-        if not valid_connection(self.connection):
-            self.connection = Session(self.engine)
-            self.connection.dry_run = None
-        self.connection.__enter__()
+        if not valid_session(self.session):
+            self.session = Session(self.engine)
+            self.session.dry_run = None
+        self.session.__enter__()
         return self
 
     def __exit__(self, type, value, traceback):
@@ -982,19 +996,16 @@ class sql_cursor(object):
             t.delete()
             
         """
-        if valid_connection(self.connection):
-            if self.connection.dry_run:
-                self.connection.rollback()
-            else:
-                self.connection.commit()
-            self.connection.__exit__(type, value, traceback)
-            self.connection = None
+        self.commit()
+        if valid_session(self.session):
+            self.session.__exit__(type, value, traceback)
+            self.session= None
         return self
     
     def __del__(self):
-        if valid_connection(self.connection):
-            self.connection.__del__()
-        
+        if valid_session(self.session):
+            self.session.__del__()
+
     @property
     def _ids(self):
         """

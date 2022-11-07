@@ -74,7 +74,7 @@ def _relabel(res, selection, strict = True):
     Example
     -------
     >>> res = dict(a = 1, b = 2, c = 3)
-    >>> selection  = ['A', 'B']
+    >>> selection = ['A', 'B']
     >>> assert _relabel(res, selection) == res                  ## no replacement, strict
     >>> assert _relabel(res, selection, strict = False) == dict(A = 1, B = 2, c = 3) ## replaceme what is possible
     >>> assert _relabel(res, ['A', 'B', 'C']) == dict(A = 1, B = 2, C = 3)
@@ -337,7 +337,7 @@ def _get_table(table_name, schema, db, server, create):
 
 def sql_table(table, db = None, non_null = None, nullable = None, _id = None, schema = None, 
               server = None, reader = None, writer = None, pk = None, doc = None, mode = None, 
-              spec = None, selection = None, order = None, joint = None, create = None):
+              spec = None, selection = None, order = None, defaults = None, joint = None, create = None):
     """
     Creates a sql table. Can also be used to simply read table from the db
 
@@ -387,6 +387,8 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
                 create = False
             else:
                 create = 's'
+    defaults:
+        this is default variable that is added to the document if it does not have its keys
 
     Returns
     -------
@@ -516,7 +518,7 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         else:
             raise ValueError(f'table {table_name} does not exist. You need to explicitly set create=True or create="t/s/d" to mandate table creation')
     res = sql_cursor(table = tbl, schema = schema, db = db, server = server, engine = e, 
-                     reader = reader, writer = writer, 
+                     reader = reader, writer = writer, defaults = defaults,
                      pk = list(pk) if isinstance(pk, dict) else pk, doc = doc,
                      spec = spec, selection = selection, order = order, joint = joint)
     return res
@@ -826,7 +828,7 @@ class sql_cursor(object):
     """
     def __init__(self, table, schema = None, db = None, engine = None, server = None, session = None,
                  spec = None, selection = None, order = None, joint = None, reader = None, writer = None, 
-                 pk = None, doc = None, **_):
+                 pk = None, defaults = None, doc = None, **_):
         """
         Parameters
         ----------
@@ -873,6 +875,7 @@ class sql_cursor(object):
             writer = table.writer if writer is None else writer
             pk = table.pk if pk is None else pk
             doc = table.doc if doc is None else doc
+            defaults = table.defaults if defaults is None else defaults
             table = table.table
     
         self.table = table
@@ -888,6 +891,7 @@ class sql_cursor(object):
         self.reader = reader
         self.writer = writer
         self.pk = pk
+        self.defaults = defaults
         self.doc = doc
     
     def copy(self):
@@ -1381,6 +1385,8 @@ class sql_cursor(object):
             Suppose you have a document with EXTRA keys. Rather than filter the document, set ignore_bad_keys = True and we will drop irrelevant keys for you
 
         """
+        if self.defaults:
+            doc.update({k : v for k,v in self.defaults.items() if k not in doc})
         doc = _relabel(res = doc, selection = self.columns, strict = False) ## we want to replace what is possible
         edoc = self._dock(doc) if write else doc
         columns = self.columns
@@ -1668,6 +1674,8 @@ class sql_cursor(object):
         """
         Similar to insert, except will throw an error if upsert = False and an existing document is not there
         """
+        if self.defaults:
+            doc.update({k : v for k,v in self.defaults.items() if k not in doc})
         existing = self.inc().inc(**self._id(doc))
         n = len(existing)
         if n == 0:
@@ -1701,6 +1709,8 @@ class sql_cursor(object):
         docs : list of dicts, dictable, pd.DataFrame
         """
         rs = dictable(docs)
+        if self.defaults:
+            rs = rs(**{k : v for k,v in self.defaults.items() if k not in rs.keys()})
         rs = _relabel(rs, self.columns, strict = False)
         if len(rs) > 0:
             if self._pk and not self._is_deleted():
@@ -1746,6 +1756,8 @@ class sql_cursor(object):
         
         """
         rs = dictable(data = data, columns = columns, **kwargs) ## this allows us to insert multiple rows easily as well as pd.DataFrame
+        if self.defaults:
+            rs = rs(**{k : v for k,v in self.defaults.items() if k not in rs.keys()})
         if len(rs)>1:
             pk = self._pk
             if pk:

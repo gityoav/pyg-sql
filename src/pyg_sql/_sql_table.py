@@ -1305,11 +1305,6 @@ class sql_cursor(object):
         return res
     
     
-    @property
-    def session(self):
-        return Session(self.engine)
-    
-    
     def __len__(self):
         statement = select(func.count()).select_from(self._table)
         if self.spec is not None:

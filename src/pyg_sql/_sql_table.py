@@ -144,6 +144,88 @@ def _like_within_doc(v, k):
     return '%' + dumps(encode({k : v}))[1:-1] + '%'
 
 
+class sql_df():
+    """
+    a helper class designd to allow access of DataFrames this way:
+
+    >>> sql_table(...).df()
+    >>> sql_table(...).df[::]
+    >>> sql_table(...).df[0] ## a pd.Series of the 1st column
+    >>> sql_table(...).df[:20] ## a pd.DataFrame of the top 20 rows
+
+    """
+    def __init__(self, cursor):
+        self.cursor = cursor
+
+    def __call__(self, decimal2float = True, start = None, stop = None, step = None):
+        """
+        This is a more optimized, faster version for reading the table. 
+        It retuns the data as a pd.DataFrame,
+        In addition, it converts NUMERIC type (which is cast to decimal.Decimal) into a float
+
+        
+        Parameters
+        ----------
+        decimal2float: bool
+            converts sql.types.NUMERIC columns into float
+
+        Returns
+        -------
+        pd.DataFrame
+            The data, optimized as a dataframe.
+
+        
+        Example: speed comparison
+        --------
+
+        >>> from pyg import * 
+        >>> t = sql_table(db = 'db', table = 'tbl', nullable = dict(a = int, b = float, c = str))
+        >>> rs =dictable(a = range(100)) * dict(b = list(np.arange(0,100,1.0))) * dict(c = list('abcdefghij'))
+        >>> t = t.insert_many(rs)      
+        
+        ## reading the data as t[::] is slow...
+        >>> x = timer(lambda : t[::])()
+        2022-08-21 18:03:52,594 - pyg - INFO - TIMER: took 0:00:13.139333 sec
+ 
+        ## reading the data as t.df() is much faster...
+        >>> y = timer(lambda : t.df())()
+        2022-08-21 18:04:24,809 - pyg - INFO - TIMER: took 0:00:00.456988 sec
+
+
+        """
+        cursor = self.cursor
+        statement = cursor.statement()
+        if (is_int(start) and start < 0) or (is_int(stop) and stop < 0):
+            n = len(cursor)
+            start = n + start if is_int(start) and start < 0 else start                            
+            stop = n + stop if is_int(stop) and stop < 0 else stop
+        if start and cursor.order is not None:
+            statement = statement.offset(start)
+            stop = stop if stop is None else stop - start
+        if stop is not None:
+            statement = statement.limit(1+stop)
+        if _pd_is_old:
+            data, columns = cursor.execute(statement, transform = _data_and_columns)
+            res = pd.DataFrame(data, columns = columns)
+        else:
+            res = cursor.execute(statement, transform = pd.DataFrame)
+        if start is not None or stop is not None or step is not None:
+            res = res.iloc[slice(start, stop, step)]
+        if decimal2float:
+            for col in res.columns:
+                t = cursor.table.columns[col].type
+                if isinstance(t, NUMERIC) and not isinstance(t, (FLOAT, INT)):
+                    res[col] = res[col].astype(float)
+        return _relabel(res, cursor.selection)
+    
+    def __getitem__(self, value):
+        if isinstance(value, slice):
+            start, stop, step = value.start, value.stop, value.step
+            return self(start = start, stop = stop, step = step)
+        elif isinstance(value, int):
+            return pd.Series(self.cursor[value])
+        
+
 # def pickle_loads(value):
 #     if isinstance(value, dict):
 #         return type(value)({k: pickle_loads(v) for k, v in value.items()})
@@ -1511,7 +1593,7 @@ class sql_cursor(object):
                     raise ValueError('mismatch in columns')
                 res = dict(zip(columns, res)) # this zip can be evil
         return res
-    
+        
     def _read_statement(self, start = None, stop = None, step = None):
         """
         returns a list of records from the database. returns a list of tuples
@@ -1532,7 +1614,8 @@ class sql_cursor(object):
         return dict(data = data, columns = columns)
     
     
-    def df(self, decimal2float = True):
+    @property
+    def df(self):
         """
         This is a more optimized, faster version for reading the table. 
         It retuns the data as a pd.DataFrame,
@@ -1554,8 +1637,8 @@ class sql_cursor(object):
         --------
 
         >>> from pyg import * 
-        >>> t = sql_table(db = 'db', table = 'tbl', nullable = dict(a = int, b = float, c = str))
-        >>> rs =dictable(a = range(100)) * dict(b = list(np.arange(0,100,1.0))) * dict(c = list('abcdefghij'))
+        >>> t = sql_table(db = 'db', table = 'tbl_df', server = 'DESKTOP-GOQ0NSM', nullable = dict(a = int, b = float, c = str))
+        >>> rs = dictable(a = range(100)) * dict(b = list(np.arange(0,100,1.0))) * dict(c = list('abcdefghij'))
         >>> t = t.insert_many(rs)      
         
         ## reading the data as t[::] is slow...
@@ -1566,20 +1649,13 @@ class sql_cursor(object):
         >>> y = timer(lambda : t.df())()
         2022-08-21 18:04:24,809 - pyg - INFO - TIMER: took 0:00:00.456988 sec
 
-
+        Example: access using get item
+        --------
+        >>> t.df[:10]
+        >>> t.df[100:120]
+        >>> t.df[10]
         """
-        statement = self.statement()
-        if _pd_is_old:
-            data, columns = self.execute(statement, transform = _data_and_columns)
-            res = pd.DataFrame(data, columns = columns)
-        else:
-            res = self.execute(statement, transform = pd.DataFrame)
-        if decimal2float:
-            for col in res.columns:
-                t = self.table.columns[col].type
-                if isinstance(t, NUMERIC) and not isinstance(t, (FLOAT, INT)):
-                    res[col] = res[col].astype(float)
-        return _relabel(res, self.selection)
+        return sql_df(self)
             
     
     def _rows_to_docs(self, data, reader = None, load = True, columns = None):

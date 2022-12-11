@@ -1970,8 +1970,29 @@ class sql_cursor(object):
             res.full_delete()
         return self
 
-    def sort(self, *order):
+    def sort(self, *order, **orderby):
+        """
+        Allows sorting of the table by multiple methods:
+            
+        :Example:
+        ---------
+        >>> t = sql_table(db = 'db', table = 'tbl_df', server = 'DESKTOP-GOQ0NSM', nullable = dict(a = int, b = float, c = str))
+        >>> t.sort(a = 'desc', b = 'asc')
+        >>> t.sort(dict(a = 'desc', b = 'asc'))
+        >>> t.sort(a = -1, b = 1)
+        >>> t.sort('a', 'b')
+        >>> t.sort(['a', 'b'])
+        """        
         order = as_list(order)
+        if len(order) == 1 and isinstance(order[0], dict):
+            order = order[0]
+        if len(orderby):
+            if isinstance(order, dict):
+                order.append(orderby)
+            elif len(order) == 0:
+                order = orderby
+            else:
+                raise ValueError('cannot mix order and orderby')
         if not order:
             return self
         else:

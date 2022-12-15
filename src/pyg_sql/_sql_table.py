@@ -1005,10 +1005,6 @@ class sql_cursor(object):
             self.session.__exit__(type, value, traceback)
             self.session= None
         return self
-    
-    def __del__(self):
-        if valid_session(self.session):
-            self.session.__del__()
 
     @property
     def _ids(self):

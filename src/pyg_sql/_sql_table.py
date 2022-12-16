@@ -590,7 +590,7 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
 
     ## time to access/create tables        
     e = _get_engine(server = server, db = db, schema = schema, create = create, engine = engine)
-    schema = create_schema(engine, _schema(schema), create = create)
+    schema = create_schema(e, _schema(schema), create = create)
     try:
         tbl = _get_table(table_name = table_name, schema = schema, db = db, server = server, create = create) ## by default we grab the existing table
         if doc is None and _doc in [col.name for col in tbl.columns]:

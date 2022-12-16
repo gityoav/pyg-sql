@@ -4,6 +4,7 @@ from pyg_base import cache, cfg_read, as_list, dictable, lower, loop, replace, D
 from pyg_encoders import as_reader, as_writer, dumps, loads, encode
 from sqlalchemy import Table, Column, Integer, String, MetaData, Identity, Float, DATE, DATETIME, TIME, select, func, not_, desc, asc
 from sqlalchemy.orm import Session
+from sqlalchemy.engine.base import Engine
 from sqlalchemy.types import NUMERIC, FLOAT, INT
 import datetime
 from copy import copy
@@ -357,7 +358,7 @@ def get_cstr(*pairs, **connection):
         return 'mssql+pyodbc://%(server)s/%(db)s%(params)s'%dict(server=server, db = db, params = '?' +params if params else '')
 
 
-def create_schema(engine, schema, create):
+def create_schema(engine, schema, create = True):
     if schema is None:
         return
     try:
@@ -372,28 +373,36 @@ def create_schema(engine, schema, create):
             engine.execute(sa.schema.CreateSchema(schema))
             logger.info('creating schema: %s'%schema)
     return schema
-
-
+    
 @cache
-def _get_engine(*pairs, **connection):    
+def _create_engine(cstr):
+    return sa.create_engine(cstr)
+    
+
+def _get_engine(*pairs, **connection):  
     connection = _pairs2connection(*pairs, **connection)
     server = get_server(connection.pop('server', None))
-    create = connection.pop('create', False)
-    connection['driver'] = get_driver(connection.pop('driver', None))
-    db = _db(connection)    
-    if isinstance(server, sa.engine.base.Engine):
+    if isinstance(server, Engine):
         return server
+    connection['driver'] = get_driver(connection.pop('driver', None))
+    engine = connection.pop('engine', None)
+    db = _db(connection)    
+    if isinstance(engine, Engine):
+        return engine
     cstr = get_cstr(server=server, db = db, **connection)    
-    e = sa.create_engine(cstr)
+    if callable(engine): # delegates connection to another function
+        e = Dict(server = server, db = db, environment = server, connection = cstr).apply(engine)
+    else:
+        e = _create_engine(cstr)
     try:
         sa.inspect(e)
     except Exception:
-        if create is True or (is_str(create) and 'd' in create.lower()):
+        create = connection.pop('create', False)
+        if create is True or (is_str(create) and 'd' in create.lower()): ## create can be a "level" specifying if it is to be created
             create_database(cstr)
             logger.info('creating database: %s'%db)
         else:
             raise ValueError('You have to explicitly permission the creation of the database by setting create = True or create ="d"')
-        e = sa.create_engine(cstr)       
     return e
 
 
@@ -407,19 +416,16 @@ def get_engine(*pairs, **connection):
     return _get_engine(*pairs, **connection)
     
 
-
 @cache
-def _get_table(table_name, schema, db, server, create):
-    e = _get_engine(server = server, db = db, schema = schema, create = create)
+def _get_table(table_name, schema, db, server, create, engine = None):
+    e = _get_engine(server = server, db = db, schema = schema, create = create, engine = engine)
     meta = MetaData()
     return Table(table_name, meta, autoload_with = e, schema = schema)
 
 
-
-
 def sql_table(table, db = None, non_null = None, nullable = None, _id = None, schema = None, 
               server = None, reader = None, writer = None, pk = None, doc = None, mode = None, 
-              spec = None, selection = None, order = None, defaults = None, joint = None, create = None):
+              spec = None, selection = None, order = None, defaults = None, joint = None, create = None, engine = None):
     """
     Creates a sql table. Can also be used to simply read table from the db
 
@@ -469,6 +475,8 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
                 create = False
             else:
                 create = 's'
+    engine: sqlalchemy Engine, None, or a function that returns an engine
+        This allows connection management to be delegated to the user who may want to manage her own connection protocol
     defaults:
         this is default variable that is added to the document if it does not have its keys
 
@@ -580,9 +588,9 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
     if create is None:
         create = 's' if len(cols) else False
 
-    ## time to access/create tables    
-    e = _get_engine(server = server, db = db, schema = schema, create = create)    
-    schema = create_schema(e, _schema(schema), create = create)
+    ## time to access/create tables        
+    e = _get_engine(server = server, db = db, schema = schema, create = create, engine = engine)
+    schema = create_schema(engine, _schema(schema), create = create)
     try:
         tbl = _get_table(table_name = table_name, schema = schema, db = db, server = server, create = create) ## by default we grab the existing table
         if doc is None and _doc in [col.name for col in tbl.columns]:

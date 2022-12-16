@@ -386,6 +386,7 @@ def _get_engine(*pairs, **connection):
         return server
     connection['driver'] = get_driver(connection.pop('driver', None))
     engine = connection.pop('engine', None)
+    create = connection.pop('create', False)
     db = _db(connection)    
     if isinstance(engine, Engine):
         return engine
@@ -397,7 +398,6 @@ def _get_engine(*pairs, **connection):
     try:
         sa.inspect(e)
     except Exception:
-        create = connection.pop('create', False)
         if create is True or (is_str(create) and 'd' in create.lower()): ## create can be a "level" specifying if it is to be created
             create_database(cstr)
             logger.info('creating database: %s'%db)

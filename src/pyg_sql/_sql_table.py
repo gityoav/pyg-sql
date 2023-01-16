@@ -2412,9 +2412,9 @@ class sql_cursor(object):
             existing = self.inc(**params)[idx].df()#[:100]
             if len(idx) == 1:
                 duplicates = set(res.index) & set(existing[idx[0]])
-                res = res.drop(duplicates)
             else:
                 duplicates = set(res.index) & set(map(tuple, existing.values))
+            if len(duplicates):
                 res = res.drop(duplicates)
             res.to_sql(name = self.name, con = self.engine, schema = self.schema,
                        if_exists = 'append', index = True, index_label = index)

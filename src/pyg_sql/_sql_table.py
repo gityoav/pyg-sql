@@ -11,7 +11,7 @@ from copy import copy
 from pyg_base import logger, is_regex
 from functools import partial
 import pandas as pd
-
+_CHUNK = 100
 
 _id = '_id'
 _doc = 'doc'
@@ -2429,8 +2429,8 @@ class sql_cursor(object):
             else:
                 duplicates = set(res.index) & set(map(tuple, existing.values))
                 dups = [dict(zip(idx, d)) for d in list(duplicates)]
-            for i in range(len(dups), 100):
-                self.inc(dups[i, i+100]).delete()
+            for i in range(0, len(dups), _CHUNK):
+                self.inc(dups[i, i+_CHUNK]).delete() ## SQL statement OR is limited in length
             res.to_sql(name = self.name, con = self.engine, schema = self.schema,
                        if_exists = 'append', index = True, index_label = index)
             return res           

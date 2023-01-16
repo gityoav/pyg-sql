@@ -2095,74 +2095,345 @@ class sql_cursor(object):
         return ('server', self.server), ('db', self.db), ('schema', self.schema), ('table', self.table.name)
 
 
-    def read_sql(self, params = None, columns = None, index = None, coerce_float : bool = True, duplicate = None):
+    def read_sql(self, params = None, columns = None, index = None, coerce_float : bool = True, duplicate = None, **kwargs):
+        """
+        reads a dataframe from a table
+
+        Parameters
+        ----------
+        params : dict, optional
+            filtering the table. The default is None.
+        columns : str/list, optional
+            Names of the columns. The default is None, which returns all columns except the one in filters or in index
+        index : str, optional
+            name of the index.
+        coerce_float : bool, optional
+            DESCRIPTION. The default is True.
+        duplicate : TYPE, optional
+            DESCRIPTION. The default is None.
+
+        Raises
+        ------
+        ValueError
+            DESCRIPTION.
+
+        Returns
+        -------
+        TYPE
+            DESCRIPTION.
+        
+        
+        Example:
+        --------
+        >>> from pyg import * 
+        >>> import datetime
+        >>> self = sql_table(table = 'stock_prices', db = 'test_db', schema = 'dbo', server = 'DESKTOP-LU5C5QF',
+                             non_null = dict(country = str, stock = str, 
+                                             date = datetime.datetime, 
+                                             price = float, 
+                                             volume = int))
+
+        >>> self.delete()
+        
+        ### we start by inserting some data...
+
+        >>> aapl = pd.DataFrame(dict(price = np.random.normal(0,1,1000),
+                                     volume = np.random.randint(0,100, 1000)), drange(-999))
+
+        >>> aapl['stock'] = 'aapl'; aapl['country'] = 'US'
+        >>> aapl.to_sql(name = 'stock_prices', con = self.engine, schema = 'dbo', 
+                      if_exists = 'append', index = True, index_label = 'date')
+
+        >>> ibm = pd.DataFrame(dict(price = np.random.normal(0,1,1000),
+                                     volume = np.random.randint(0,100, 1000)), drange(-999))
+
+        >>> ibm['stock'] = 'ibm'; ibm['country'] = 'US'
+        >>> ibm.to_sql(name = 'stock_prices', con = self.engine, schema = 'dbo', 
+                      if_exists = 'append', index = True, index_label = 'date')
+
+        ### now let us read the data:
+        
+        >>> self.read_sql(params = dict(stock = 'aapl', country = 'us'), index = 'date')
+        
+                       price  volume
+        date                        
+        2020-04-22  0.361650      95
+        2020-04-23  1.328385      71
+        2020-04-24  0.492578      65
+        2020-04-25  0.111558      85
+        2020-04-26 -0.242754      13
+                     ...     ...
+        2023-01-12  2.271275      60
+        2023-01-13  0.042965       9
+        2023-01-14  0.421812      83
+        2023-01-15 -1.024092      83
+        2023-01-16 -0.820798      40
+        
+        >>> self.read_sql(params = dict(stock = 'aapl', country = 'us'), index = 'date', columns = 'price')
+        >>> self.read_sql(stock = 'aapl', country = 'us', index = 'date', columns = 'price') ## same
+        
+        date
+        2020-04-22    0.361650
+        2020-04-23    1.328385
+        2020-04-24    0.492578
+        2020-04-25    0.111558
+        2020-04-26   -0.242754
+          
+        2023-01-12    2.271275
+        2023-01-13    0.042965
+        2023-01-14    0.421812
+        2023-01-15   -1.024092
+        2023-01-16   -0.820798
+        Name: price, Length: 1000, dtype: float64        
+        
+
+        Example: handling duplicates
+        ----------------------------
+        There are three methods: 
+        1) ignore duplicates and grab all the data:
+    
+        >>> self.read_sql(country = 'us', index = 'date')
+                   stock     price  volume
+        date                              
+        2020-04-22  aapl -0.984502      24
+        2020-04-22   ibm  1.053406      58
+        2020-04-23  aapl -0.768723      28
+        2020-04-23   ibm  1.008445      66
+        2020-04-24  aapl -0.187649      12
+                 ...       ...     ...
+        2023-01-14  aapl  0.234413      43
+        2023-01-15   ibm -0.297252      15
+        2023-01-15  aapl  0.901687      77
+        2023-01-16  aapl  1.248626      79
+        2023-01-16   ibm -0.580478      11
+
+
+        2) make duplicates raise an error:
+
+        >>> self.read_sql(country = 'us', index = 'date', duplicate = True)
+
+        
+        File "C:\github\pyg-sql\src\pyg_sql\_sql_table.py", line 2209, in read_sql
+            raise ValueError(f'found duplicate entries: {n}')
+        
+        ValueError: found duplicate entries:             
+                    stock  price  volume
+        date                            
+        2020-04-22      2      2       2
+        2020-04-23      2      2       2
+        2020-04-24      2      2       2
+        2020-04-25      2      2       2
+        2020-04-26      2      2       2
+
+        3) create a simple function that can resolve the dataframe on each date:
+            
+        self.read_sql(country = 'us', index = 'date', duplicate = lambda df: df[df.stock == 'aapl'])
+
+                       stock     price  volume       date
+        date                                             
+        2020-04-22 0    aapl -0.984502      24 2020-04-22
+        2020-04-23 1    aapl -0.768723      28 2020-04-23
+        2020-04-24 2    aapl -0.187649      12 2020-04-24
+        2020-04-25 3    aapl -0.799186       7 2020-04-25
+        2020-04-26 4    aapl -0.363066      84 2020-04-26
+                     ...       ...     ...        ...
+        2023-01-12 995  aapl -0.524285      63 2023-01-12
+        2023-01-13 996  aapl -0.074200      92 2023-01-13
+        2023-01-14 997  aapl  0.234413      43 2023-01-14
+
+        Example: multiple index
+        ---------------
+        >>> self.read_sql(country = 'us', index = ['stock', 'date'], duplicate = True)
+        
+                             price  volume
+        stock date                        
+        aapl  2020-04-22 -0.984502      24
+              2020-04-23 -0.768723      28
+              2020-04-24 -0.187649      12
+              2020-04-25 -0.799186       7
+              2020-04-26 -0.363066      84
+                           ...     ...
+        ibm   2023-01-12  0.224751      23
+              2023-01-13 -0.831409      93
+              2023-01-14  0.770350      65
+              2023-01-15 -0.297252      15
+              2023-01-16 -0.580478      11
+              
+        >>> self.read_sql(country = 'us', columns = 'price', index = ['stock', 'date'])
+
+        stock  date      
+        aapl   2020-04-22   -0.984502
+               2020-04-23   -0.768723
+               2020-04-24   -0.187649
+               2020-04-25   -0.799186
+               2020-04-26   -0.363066
+          
+        ibm    2023-01-12    0.224751
+               2023-01-13   -0.831409
+               2023-01-14    0.770350
+               2023-01-15   -0.297252
+               2023-01-16   -0.580478
+        Name: price, Length: 2000, dtype: float64
+        """
         params = params or {}
-        index = as_list(index)
+        params.update(kwargs)
+        idx = as_list(index)
         if columns is None:
-            cols = ulist(self.columns) - list(params.keys()) - index
+            cols = ulist(self.columns) - list(params.keys()) - idx
         else:
             cols = as_list(columns)
         if len(cols) == 0:
             raise ValueError('no columns selected to load')
-        df = self.inc(**params)[cols+ index].df()            
-        if index:
+        df = self.inc(**params)[cols+ idx].df(coerce_float = coerce_float)            
+        if idx:
             if duplicate is None or duplicate is False:   
-                res = df.set_index(index).sort_index()
+                res = df.set_index(idx).sort_index()
             elif duplicate is True or duplicate == 'fail':
-                n = df.groupby(index).count()
+                n = df.groupby(idx).count()
                 if len(n) < len(df):
                     n = n[n[cols[0]]>1]
                     raise ValueError(f'found duplicate entries: {n}')
                 else:
-                    res = df.set_index(index).sort_index()
+                    res = df.set_index(idx).sort_index()
             else:
-                res = df.groupby(index).apply(duplicate)
+                res = df.groupby(idx).apply(duplicate)
         else:
             res = df
         return res[columns] if is_str(columns) else res
+
         
+    def to_sql(self, df, index = None, series = None, method = None, params = None, **kwargs):
+        """
+        df: pd.DataFrame or pd.Series
+        
+        index: str or None
+            name of the index
+        
+        params: dict
+            filter to define uniqueness
+        
+        series: str or None:
+            name of the column if df is a series
+            
+        method: str
+            We are going to allow various methods of sending data to sql...
+        1) insert: ignore any duplicates with existing data
+        2) replace: delete any existing data based on params, and then insert
+        3) update: look at duplicates comparing existing values and new values based on params + index, 
+                    delete duplicates FROM THE SQL TABLE and then insert
+        4) append: look at duplicates comparing existing values and new values based on params + index, 
+                    delete duplicates FROM THE dataframe provided and then insert
 
-def pd_to_sql(df, name, con = None, schema = None, if_exists = None, index = None, series = None, chunksize : int = None, dtype = None, method : str = None):
-    """
-    This extends df.to_sql() methodology to support more complicated if_exists
+        NOTE: update/append require the index to be provided and enforce uniqueness of the index on the dataframe provided
+        
+        Example:
+        ---------
 
-    Parameters
-    ----------
-    df : TYPE
-        DESCRIPTION.
-    name : TYPE
-        DESCRIPTION.
-    con : TYPE
-        DESCRIPTION.
-    schema : TYPE
-        DESCRIPTION.
-    if_exists : TYPE
-        DESCRIPTION.
-    index : TYPE
-        DESCRIPTION.
-    series : TYPE
-        DESCRIPTION.
-    chunksize : int, optional
-        DESCRIPTION. The default is None.
-    dtype : TYPE, optional
-        DESCRIPTION. The default is None.
-    method : str, optional
-        DESCRIPTION. The default is None.
+        >>> from pyg import * 
+        >>> import datetime
+        >>> self = sql_table(table = 'stock_prices', db = 'test_db', schema = 'dbo', server = 'DESKTOP-LU5C5QF',
+                             non_null = dict(country = str, stock = str, 
+                                             date = datetime.datetime, 
+                                             price = float, 
+                                             volume = int))
 
-    Returns
-    -------
-    None.
+        >>> self.delete()
     
+        Example: simple insert
+        ----------------------
+        >>> params = dict(stock = 'tsla', country = 'US'); index = 'date'; kwargs = {}
+        >>> tsla = pd.DataFrame(dict(price = np.random.normal(0,1,1000),
+                                             volume = np.random.randint(0,100, 1000)), drange(-999))
+        >>> self.to_sql(tsla, country = 'US', stock = 'tsla', index = 'date')
+                
+                       price  volume country stock
+        date                                      
+        2020-04-22 -1.761752       6      US  tsla
+        2020-04-23 -0.110846      99      US  tsla
+        2020-04-24  0.758875       5      US  tsla
+        2020-04-25 -1.028290      63      US  tsla
+        2020-04-26 -0.601785      64      US  tsla
+                     ...     ...     ...   ...
+        2023-01-12 -1.168227      99      US  tsla
+        2023-01-13 -0.026940      74      US  tsla
     
+        >>> self
+        Out[4]: 
+        sql_cursor: test_db.dbo.stock_prices  
+        SELECT country, stock, date, price, volume 
+        FROM dbo.stock_prices
+        1000 records 
+   
+        Example: insertion, ignoring duplicates...
+        --------
+        >>> prices_later = pd.DataFrame(dict(price = np.random.normal(0,1,500),
+                                             volume = np.random.randint(0,100, 500)), drange(1,500))
+        >>> full_history = pd.concat([tsla, prices_later])
+        >>> self.to_sql(full_history, country = 'US', stock = 'tsla', index = 'date')        
 
-    """
-    db = sql_table(name, schema = schema, server = con)
-    schema = db.schema
-    name = db.table_name
+        >>> self    
+        sql_cursor: test_db.dbo.stock_prices  
+        SELECT country, stock, date, price, volume 
+        FROM dbo.stock_prices
+        2500 records  ### <-------- We now have duplicate data for the history        
 
-    
-    
-    
-    
-    
-
+        Example: replacing completely
+        -----------------------------
+        method = 'replace'
+        
+        """
+        params = params or {}
+        params.update(kwargs)
+        index = index or df.index.name
+        idx = as_list(index)
+        res = pd.DataFrame(df)
+        res.index.name = index
+        if False:
+            idx = index = ['date', 'stock']
+            res = res.reset_index().set_index(idx)
+        for k, v in params.items():
+            res[k] = v
+        if method is None or method == 'insert': # I don't care about duplicates
+            res.to_sql(name = self.name, con = self.engine, schema = self.schema,
+                       if_exists = 'append', index = True if index else False, index_label = index)
+            return res
+        elif method == 'replace':
+            self.inc(**params).delete()
+            res.to_sql(name = self.name, con = self.engine, schema = self.schema,
+                       if_exists = 'append', index = True if index else False, index_label = index)
+            return res
+        if len(idx) == 0:
+            raise ValueError(f'cannot {method} based on an index, unless an index is provided')
+        n = res.groupby(idx).count()
+        if len(n) < len(res):
+            duplicates = n[n[idx[0]]>1]
+            raise ValueError(f'The dataframe provided contains duplicates: {duplicates}')
+        if method == 'append': ## we remove duplicates from the new data
+            existing = self.inc(**params)[idx].df()#[:100]
+            if len(idx) == 1:
+                duplicates = set(res.index) & set(existing[idx[0]])
+                res = res.drop(duplicates)
+            else:
+                duplicates = set(res.index) & set(map(tuple, existing.values))
+                res = res.drop(duplicates)
+            res.to_sql(name = self.name, con = self.engine, schema = self.schema,
+                       if_exists = 'append', index = True, index_label = index)
+            return res           
+        elif method == 'update': ## we remove duplicates from the table
+            if len(idx) == 0:
+                raise ValueError('cannot append based on an index, unless an index is provided')
+            existing = self.inc(**params)[idx].df()#[:100]
+            if len(idx) == 1:
+                duplicates = set(res.index) & set(existing[idx[0]])
+                dups = [{idx[0]: d} for d in list(duplicates)]
+            else:
+                duplicates = set(res.index) & set(map(tuple, existing.values))
+                dups = [dict(zip(idx, d)) for d in list(duplicates)]
+            for i in range(len(dups), 100):
+                self.inc(dups[i, i+100]).delete()
+            res.to_sql(name = self.name, con = self.engine, schema = self.schema,
+                       if_exists = 'append', index = True, index_label = index)
+            return res           
+        else:
+            raise ValueError(f'method {method} not recognised, needs to be in replace/append/update/insert')
+        

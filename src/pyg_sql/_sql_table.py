@@ -158,7 +158,7 @@ class sql_df():
     def __init__(self, cursor):
         self.cursor = cursor
 
-    def __call__(self, decimal2float = True, start = None, stop = None, step = None):
+    def __call__(self, coerce_float = True, start = None, stop = None, step = None):
         """
         This is a more optimized, faster version for reading the table. 
         It retuns the data as a pd.DataFrame,
@@ -167,7 +167,7 @@ class sql_df():
         
         Parameters
         ----------
-        decimal2float: bool
+        coerce_float: bool
             converts sql.types.NUMERIC columns into float
 
         Returns
@@ -212,7 +212,7 @@ class sql_df():
             res = cursor.execute(statement, transform = pd.DataFrame)
         if start is not None or stop is not None or step is not None:
             res = res.iloc[slice(start, stop, step)]
-        if decimal2float:
+        if coerce_float:
             for col in res.columns:
                 t = cursor.table.columns[col].type
                 if isinstance(t, NUMERIC) and not isinstance(t, (FLOAT, INT)):
@@ -1627,7 +1627,7 @@ class sql_cursor(object):
         
         Parameters
         ----------
-        decimal2float: bool
+        coerce_float: bool
             converts sql.types.NUMERIC columns into float
 
         Returns
@@ -2094,4 +2094,75 @@ class sql_cursor(object):
         """
         return ('server', self.server), ('db', self.db), ('schema', self.schema), ('table', self.table.name)
 
+
+    def read_sql(self, params = None, columns = None, index = None, coerce_float : bool = True, duplicate = None):
+        params = params or {}
+        index = as_list(index)
+        if columns is None:
+            cols = ulist(self.columns) - list(params.keys()) - index
+        else:
+            cols = as_list(columns)
+        if len(cols) == 0:
+            raise ValueError('no columns selected to load')
+        df = self.inc(**params)[cols+ index].df()            
+        if index:
+            if duplicate is None or duplicate is False:   
+                res = df.set_index(index).sort_index()
+            elif duplicate is True or duplicate == 'fail':
+                n = df.groupby(index).count()
+                if len(n) < len(df):
+                    n = n[n[cols[0]]>1]
+                    raise ValueError(f'found duplicate entries: {n}')
+                else:
+                    res = df.set_index(index).sort_index()
+            else:
+                res = df.groupby(index).apply(duplicate)
+        else:
+            res = df
+        return res[columns] if is_str(columns) else res
+        
+
+def pd_to_sql(df, name, con = None, schema = None, if_exists = None, index = None, series = None, chunksize : int = None, dtype = None, method : str = None):
+    """
+    This extends df.to_sql() methodology to support more complicated if_exists
+
+    Parameters
+    ----------
+    df : TYPE
+        DESCRIPTION.
+    name : TYPE
+        DESCRIPTION.
+    con : TYPE
+        DESCRIPTION.
+    schema : TYPE
+        DESCRIPTION.
+    if_exists : TYPE
+        DESCRIPTION.
+    index : TYPE
+        DESCRIPTION.
+    series : TYPE
+        DESCRIPTION.
+    chunksize : int, optional
+        DESCRIPTION. The default is None.
+    dtype : TYPE, optional
+        DESCRIPTION. The default is None.
+    method : str, optional
+        DESCRIPTION. The default is None.
+
+    Returns
+    -------
+    None.
+    
+    
+
+    """
+    db = sql_table(name, schema = schema, server = con)
+    schema = db.schema
+    name = db.table_name
+
+    
+    
+    
+    
+    
 

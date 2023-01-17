@@ -2343,7 +2343,7 @@ class sql_cursor(object):
         return res[columns] if is_str(columns) else res
 
         
-    def to_sql(self, df, index = None, series = None, method = None, params = None, inc = None, duplicate = None, sort = None, chunksize = None, **more_inc):
+    def to_sql(self, df, index = None, series = None, method = None, params = None, inc = None, duplicate = None, sort = None, chunksize = None, upload_xor = True, **more_inc):
         """
         :Parameters:
         -------------
@@ -2372,6 +2372,11 @@ class sql_cursor(object):
         4) append:  delete duplicates FROM THE new dataframe provided 
         5) some callable(new, existing) function to merge the newly provided dataframe and existing data. 
     
+        upload_xor: bool
+            We may be interested in using a dataframe ONLY for values that exist in the database.
+            i.e. we want to update/merge with existing values but we don't want to add new records
+            xor is the data that is in new but not in existing and if upload_xor = False, this data is dropped
+            
         duplicate: str
             Only used if method is callable and a dataframe of the existing data in table needs to be read using self.read_sql()
             see sql_cursor.read_sql for explanation
@@ -2467,6 +2472,8 @@ class sql_cursor(object):
         index = index or df.index.name
         idx = as_list(index)
         res = pd.DataFrame(df)
+        if len(res) == 0:
+            return res
         res.index.name = index
         for k, v in params.items():
             res[k] = v
@@ -2500,6 +2507,10 @@ class sql_cursor(object):
                        if_exists = 'append', index = True, index_label = index)
             return res
         duplicates = sorted(set(res.index) & set(existing.index))
+        if not upload_xor:
+            res = res.loc[duplicates]
+            if len(res) == 0:
+                return res               
         if len(duplicates) == 0:
             pass
         elif method == 'append': ## we remove duplicates from the new data
@@ -2515,7 +2526,8 @@ class sql_cursor(object):
             res = pd.concat([res, merged])
             to_delete = dictable(duplicates, idx)
             self.delete(to_delete, **inc)
-        res.to_sql(name = self.name, con = self.engine, schema = self.schema, chunksize = chunksize, 
-                   if_exists = 'append', index = True, index_label = index)
+        if len(res) > 0:
+            res.to_sql(name = self.name, con = self.engine, schema = self.schema, chunksize = chunksize, 
+                       if_exists = 'append', index = True, index_label = index)
         return res           
         

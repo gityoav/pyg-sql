@@ -2326,7 +2326,7 @@ class sql_cursor(object):
         if sort:
             table = table.sort(sort)
         df = table.df(coerce_float = coerce_float)            
-        if idx:
+        if idx and len(df):
             if duplicate is None or duplicate is False:   
                 res = df.set_index(idx).sort_index()
             elif duplicate is True or duplicate == 'fail':
@@ -2420,8 +2420,28 @@ class sql_cursor(object):
 
         Example: replacing completely
         -----------------------------
-        method = 'replace'
+        >>> method = 'replace'
+        >>> self.to_sql(prices_later, country = 'US', stock = 'tsla', index = 'date', method = 'replace')        
+        >>> assert len(self) == 500
         
+        Example: appending: keep existing values but add new ones:
+        ---------
+        >>> full_history_bad = full_history.copy()
+        >>> full_history_bad['price'] = 0.0
+        >>> df = full_history_bad; inc = dict(country = 'US', stock = 'tsla'); index = 'date'; method = 'append'
+        >>> self.to_sql(df = full_history_bad, country = 'US', stock = 'tsla', index = 'date', method = 'append')
+        
+        >>> assert len(self.inc(stock = 'tsla')) == 1500 ## we are back to full history
+        >>> assert len(self.inc(stock = 'tsla').exc(price = 0)) == 500 ## we have the original good values
+        
+        Example: updating: overwrite table duplicates:
+        ---------
+        >>> full_history_bad['price'] = 1.0
+        >>> full_history_bad = full_history_bad.iloc[:1250]
+        >>> self.to_sql(df = full_history_bad, country = 'US', stock = 'tsla', index = 'date', method = 'update')
+        >>> assert len(self.inc(stock = 'tsla')) == 1500 ## we are back to full history
+        >>> assert len(self.inc(stock = 'tsla').exc(price = 1)) == 250 ## we overwrote the ones that are duplicate by index
+                
         """
         params = params or {}
         inc = inc or {}
@@ -2447,24 +2467,23 @@ class sql_cursor(object):
             raise ValueError(f'cannot {method} based on an index, unless an index is provided')
         n = res.groupby(idx).count()
         if len(n) < len(res):
-            duplicates = n[n[idx[0]]>1]
-            raise ValueError(f'The dataframe provided contains duplicates: {duplicates}')
+            duplicates = n[n.iloc[:,0]>1]
+            if len(duplicates) > 0:
+                raise ValueError(f'The dataframe provided contains duplicates: {duplicates}')
         if method not in ('append', 'update'):
             raise ValueError(f'method {method} not recognised, needs to be in replace/append/update/insert')
-        existing = self.inc(**inc)[idx].df()
-        if len(idx) == 1:
-            duplicates = set(res.index) & set(existing[idx[0]])
-        else:
-            duplicates = set(res.index) & set(map(tuple, existing.values))
-        if method == 'append': ## we remove duplicates from the new data
-            if len(duplicates):
-                res = res.drop(duplicates)
+        existing = self.inc(**inc)[idx].df().set_index(idx)
+        if len(existing) == 0:
             res.to_sql(name = self.name, con = self.engine, schema = self.schema, if_exists = 'append', index = True, index_label = index)
-            return res           
+            return res
+        duplicates = set(res.index) & set(existing.index)
+        if len(duplicates) == 0:
+            pass
+        elif method == 'append': ## we remove duplicates from the new data
+            res = res.drop(duplicates)
         elif method == 'update': ## we remove duplicates from the table
-            if len(duplicates): 
-                df = dictable(duplicates, idx)
-                self.delete(df, **inc)
-            res.to_sql(name = self.name, con = self.engine, schema = self.schema, if_exists = 'append', index = True, index_label = index)
-            return res           
+            df = dictable(duplicates, idx)
+            self.delete(df, **inc)
+        res.to_sql(name = self.name, con = self.engine, schema = self.schema, if_exists = 'append', index = True, index_label = index)
+        return res           
         

@@ -54,6 +54,8 @@ def sql_binary_store(path):
 
 def sql_dumps(obj, path):
     """
+    converts an obj into a binary within a sql binary store. a litle like pickle.dumps
+    
     :Example
     --------
     >>> from pyg import *
@@ -90,6 +92,9 @@ def sql_dumps(obj, path):
     
 
 def sql_loads(path):
+    """
+    loads an obj from a binary within a sql binary store, a litle like pickle.laods
+    """    
     res = sql_binary_store(path)
     cursor = res.cursor
     root = res.root

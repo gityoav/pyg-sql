@@ -523,13 +523,29 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         elif len(values)>2:
             raise ValueError('not sure how to translate this %s into a db.table format'%table)
     elif isinstance(table, partial): # support for using the partial rather than the actual table
+        # if not schema and not db and not server and not pk and not writer and not doc and not engine:
+        #     return table()
         db = table.keywords.get('db') if db is None else db
         schema = table.keywords.get('schema') if schema is None else schema
         server = table.keywords.get('server') if server is None else server
-        pk = table.keywords.get('pk') if pk is None else pk
         writer = table.keywords.get('writer') if writer is None else writer
+        engine = table.keywords.get('engine') if engine is None else engine
         doc = table.keywords.get('doc') if doc is None else doc
+        pk = table.keywords.get('pk') if pk is None else pk
         table = table.keywords['table']
+    elif isinstance(table, sql_cursor):
+        # if not schema and not db and not server and not pk and not writer and not doc and not engine:
+        #     return table
+        # we want to remove 
+        db = table.db if db is None else db
+        engine = table.engine if engine is None else engine            
+        schema = table.schema if schema is None else schema
+        server = table.server if server is None else server
+        engine = table.engine if engine is None else engine
+        writer = table.writer if writer is None else writer
+        doc = table.doc if doc is None else doc
+        pk = table.pk if pk is None else pk
+        table = table.name
     
     ### we resolve some parameters
     if doc is True: #user wants a doc
@@ -2530,4 +2546,42 @@ class sql_cursor(object):
             res.to_sql(name = self.name, con = self.engine, schema = self.schema, chunksize = chunksize, 
                        if_exists = 'append', index = True, index_label = index)
         return res           
+
+
+def pd_to_sql(df, table = None, db = None, server = None, schema = None, index = None, 
+              series = None, method = None, params = None, inc = None, 
+              duplicate = None, sort = None, chunksize = None, 
+              upload_xor = True, **more_inc):
+    """
+    a thin wrapper around sql_cursor.to_sql()
+    
+    Parameters
+    ----------
+    table, db, server, schema: str or partial 
+        see sql_table constructor
         
+    all the other parameters: see sql_cursor.to_sql
+    
+    """
+    cursor = sql_table(table = table, db = db, server = server, schema = schema)
+    return cursor.to_sql(df = df, index = index, series = series, method = method, params = params, inc = inc,
+                         duplicate = duplicate, sort = sort, chunksize = chunksize, upload_xor = upload_xor, **more_inc)
+
+
+def pd_read_sql(table = None, db = None, server = None, schema = None, 
+                inc = None, columns = None, index = None, coerce_float : bool = True, duplicate = None, sort = None, **more_inc):
+    """
+    a thin wrapper around sql_cursor.to_sql()
+    
+    Parameters
+    ----------
+    table, db, server, schema: str or partial 
+        see sql_table constructor
+        
+    all the other parameters: see sql_cursor.read_sql
+    
+    """
+    cursor = sql_table(table = table, db = db, server = server, schema = schema)
+    return cursor.read_sql(inc = inc, index = index, columns = columns, coerce_float = coerce_float, 
+                           duplicate = duplicate, sort = sort, **more_inc)
+    

@@ -1956,8 +1956,42 @@ class sql_cursor(object):
         self.execute(statement)
         return self
 
-    def delete(self, **kwargs):
-        res = self.inc(**kwargs)
+
+
+    def delete(self, *df, **inc):
+        """
+        removes values in current table. 
+        
+        :Parameters:
+        -------------
+        inc: dict
+            values to filter table. simple filter: e.g. inc = dict(stock = 'AAPL') will remove AAPL data only.
+            
+        df: dictable/dataframe                
+            You can further restrict what is deleted using df. e.g. if df is:
+
+                date               
+                2023-01-07 00:00:00
+                2023-01-08 00:00:00
+                2023-01-09 00:00:00
+                ...11 rows...
+                2023-01-15 00:00:00
+                2023-01-16 00:00:00
+                2023-01-17 00:00:00
+            Then we remove all dates between 7th and 17th of Jan 2023
+            
+            Why df? chunking!
+            In principle, .delete(date = list(df.date.values)) does the same.
+            df filter is done in "CHUNKS" to ensure that the SQL statement does not become too lonh            
+        """
+        res = self.inc(**inc)
+        if len(df) > 1:
+            raise ValueError('only a single dataframe/dictable for filtering is supported')
+        elif len(df) == 1:
+            rs = dictable(df[0])
+            for i in range(0, len(rs), _CHUNK):
+                res.inc(list(rs[i:i+_CHUNK])).delete()
+            return self
         ids = self._ids
         if len(res):
             if self._pk and not self._is_deleted(): ## we first copy the existing data out to deleted db
@@ -2095,33 +2129,25 @@ class sql_cursor(object):
         return ('server', self.server), ('db', self.db), ('schema', self.schema), ('table', self.table.name)
 
 
-    def read_sql(self, params = None, columns = None, index = None, coerce_float : bool = True, duplicate = None, **kwargs):
+    def read_sql(self, inc = None, columns = None, index = None, coerce_float : bool = True, duplicate = None, sort = None, **more_inc):
         """
         reads a dataframe from a table
 
         Parameters
         ----------
-        params : dict, optional
-            filtering the table. The default is None.
+        inc : dict, optional
+            filtering the table as "include". The default is None.
         columns : str/list, optional
             Names of the columns. The default is None, which returns all columns except the one in filters or in index
         index : str, optional
             name of the index.
         coerce_float : bool, optional
-            DESCRIPTION. The default is True.
-        duplicate : TYPE, optional
-            DESCRIPTION. The default is None.
-
-        Raises
-        ------
-        ValueError
-            DESCRIPTION.
-
-        Returns
-        -------
-        TYPE
-            DESCRIPTION.
-        
+            When reading decimals, coerce into float? The default is True.
+        duplicate : str/callable, optional
+            how to handle duplicates per index value. The default is None.
+        sort: str, optional
+            when we have duplicate values, what should we sort them by? This is useful for point-in-time
+            
         
         Example:
         --------
@@ -2153,7 +2179,7 @@ class sql_cursor(object):
 
         ### now let us read the data:
         
-        >>> self.read_sql(params = dict(stock = 'aapl', country = 'us'), index = 'date')
+        >>> self.read_sql(inc= dict(stock = 'aapl', country = 'us'), index = 'date')
         
                        price  volume
         date                        
@@ -2169,7 +2195,7 @@ class sql_cursor(object):
         2023-01-15 -1.024092      83
         2023-01-16 -0.820798      40
         
-        >>> self.read_sql(params = dict(stock = 'aapl', country = 'us'), index = 'date', columns = 'price')
+        >>> self.read_sql(inc = dict(stock = 'aapl', country = 'us'), index = 'date', columns = 'price')
         >>> self.read_sql(stock = 'aapl', country = 'us', index = 'date', columns = 'price') ## same
         
         date
@@ -2227,19 +2253,31 @@ class sql_cursor(object):
 
         3) create a simple function that can resolve the dataframe on each date:
             
-        self.read_sql(country = 'us', index = 'date', duplicate = lambda df: df[df.stock == 'aapl'])
+        self.read_sql(country = 'us', index = 'date', duplicate = lambda df: df[df.stock == 'aapl'].iloc[0])
 
-                       stock     price  volume       date
-        date                                             
-        2020-04-22 0    aapl -0.984502      24 2020-04-22
-        2020-04-23 1    aapl -0.768723      28 2020-04-23
-        2020-04-24 2    aapl -0.187649      12 2020-04-24
-        2020-04-25 3    aapl -0.799186       7 2020-04-25
-        2020-04-26 4    aapl -0.363066      84 2020-04-26
-                     ...       ...     ...        ...
-        2023-01-12 995  aapl -0.524285      63 2023-01-12
-        2023-01-13 996  aapl -0.074200      92 2023-01-13
-        2023-01-14 997  aapl  0.234413      43 2023-01-14
+                   stock     price  volume       date
+        date                                         
+        2020-04-23  aapl  0.868748      63 2020-04-23
+        2020-04-24  aapl  0.549170      83 2020-04-24
+        2020-04-25  aapl -0.106516      70 2020-04-25
+        2020-04-26  aapl  1.390382      99 2020-04-26
+        2020-04-27  aapl  1.803603      61 2020-04-27
+                 ...       ...     ...        ...
+        2023-01-13  aapl -0.409951       8 2023-01-13
+        2023-01-14  aapl  0.012633       2 2023-01-14
+        2023-01-15  aapl  0.998084      11 2023-01-15
+        2023-01-16  aapl -0.600712      95 2023-01-16
+        2023-01-17  aapl  0.582729      80 2023-01-17
+        
+        4) use "sort" param to pick the value you want. This is usually applied using point-in-time
+        self.read_sql(country = 'US', index = 'stock', sort = 'date', duplicate = 'last')
+
+        Out[8]: ## last values for all US stocks:
+                    date     price  volume
+        stock                             
+        aapl  2023-01-17  0.582729      80
+        ibm   2023-01-17  1.518480      99
+
 
         Example: multiple index
         ---------------
@@ -2275,16 +2313,19 @@ class sql_cursor(object):
                2023-01-16   -0.580478
         Name: price, Length: 2000, dtype: float64
         """
-        params = params or {}
-        params.update(kwargs)
+        inc = inc or {}
+        inc.update(more_inc)
         idx = as_list(index)
         if columns is None:
-            cols = ulist(self.columns) - list(params.keys()) - idx
+            cols = ulist(self.columns) - list(inc.keys()) - idx
         else:
             cols = as_list(columns)
         if len(cols) == 0:
             raise ValueError('no columns selected to load')
-        df = self.inc(**params)[cols+ idx].df(coerce_float = coerce_float)            
+        table = self.inc(**inc)[cols+ idx]
+        if sort:
+            table = table.sort(sort)
+        df = table.df(coerce_float = coerce_float)            
         if idx:
             if duplicate is None or duplicate is False:   
                 res = df.set_index(idx).sort_index()
@@ -2302,7 +2343,7 @@ class sql_cursor(object):
         return res[columns] if is_str(columns) else res
 
         
-    def to_sql(self, df, index = None, series = None, method = None, params = None, **kwargs):
+    def to_sql(self, df, index = None, series = None, method = None, params = None, inc = None, **more_inc):
         """
         df: pd.DataFrame or pd.Series
         
@@ -2341,7 +2382,7 @@ class sql_cursor(object):
     
         Example: simple insert
         ----------------------
-        >>> params = dict(stock = 'tsla', country = 'US'); index = 'date'; kwargs = {}
+        >>> inc = dict(stock = 'tsla', country = 'US'); index = 'date'; kwargs = {}
         >>> tsla = pd.DataFrame(dict(price = np.random.normal(0,1,1000),
                                              volume = np.random.randint(0,100, 1000)), drange(-999))
         >>> self.to_sql(tsla, country = 'US', stock = 'tsla', index = 'date')
@@ -2383,22 +2424,22 @@ class sql_cursor(object):
         
         """
         params = params or {}
-        params.update(kwargs)
+        inc = inc or {}
+        inc.update(more_inc)
         index = index or df.index.name
         idx = as_list(index)
         res = pd.DataFrame(df)
         res.index.name = index
-        if False:
-            idx = index = ['date', 'stock']
-            res = res.reset_index().set_index(idx)
         for k, v in params.items():
+            res[k] = v
+        for k, v in inc.items():
             res[k] = v
         if method is None or method == 'insert': # I don't care about duplicates
             res.to_sql(name = self.name, con = self.engine, schema = self.schema,
                        if_exists = 'append', index = True if index else False, index_label = index)
             return res
         elif method == 'replace':
-            self.inc(**params).delete()
+            self.inc(**inc).delete()
             res.to_sql(name = self.name, con = self.engine, schema = self.schema,
                        if_exists = 'append', index = True if index else False, index_label = index)
             return res
@@ -2408,32 +2449,22 @@ class sql_cursor(object):
         if len(n) < len(res):
             duplicates = n[n[idx[0]]>1]
             raise ValueError(f'The dataframe provided contains duplicates: {duplicates}')
+        if method not in ('append', 'update'):
+            raise ValueError(f'method {method} not recognised, needs to be in replace/append/update/insert')
+        existing = self.inc(**inc)[idx].df()
+        if len(idx) == 1:
+            duplicates = set(res.index) & set(existing[idx[0]])
+        else:
+            duplicates = set(res.index) & set(map(tuple, existing.values))
         if method == 'append': ## we remove duplicates from the new data
-            existing = self.inc(**params)[idx].df()#[:100]
-            if len(idx) == 1:
-                duplicates = set(res.index) & set(existing[idx[0]])
-            else:
-                duplicates = set(res.index) & set(map(tuple, existing.values))
             if len(duplicates):
                 res = res.drop(duplicates)
-            res.to_sql(name = self.name, con = self.engine, schema = self.schema,
-                       if_exists = 'append', index = True, index_label = index)
+            res.to_sql(name = self.name, con = self.engine, schema = self.schema, if_exists = 'append', index = True, index_label = index)
             return res           
         elif method == 'update': ## we remove duplicates from the table
-            if len(idx) == 0:
-                raise ValueError('cannot append based on an index, unless an index is provided')
-            existing = self.inc(**params)[idx].df()#[:100]
-            if len(idx) == 1:
-                duplicates = set(res.index) & set(existing[idx[0]])
-                dups = [{idx[0]: d} for d in list(duplicates)]
-            else:
-                duplicates = set(res.index) & set(map(tuple, existing.values))
-                dups = [dict(zip(idx, d)) for d in list(duplicates)]
-            for i in range(0, len(dups), _CHUNK):
-                self.inc(dups[i, i+_CHUNK]).delete() ## SQL statement OR is limited in length
-            res.to_sql(name = self.name, con = self.engine, schema = self.schema,
-                       if_exists = 'append', index = True, index_label = index)
+            if len(duplicates): 
+                df = dictable(duplicates, idx)
+                self.delete(df, **inc)
+            res.to_sql(name = self.name, con = self.engine, schema = self.schema, if_exists = 'append', index = True, index_label = index)
             return res           
-        else:
-            raise ValueError(f'method {method} not recognised, needs to be in replace/append/update/insert')
         

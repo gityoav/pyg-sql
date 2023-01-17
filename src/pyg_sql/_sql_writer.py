@@ -18,10 +18,20 @@ def sql_binary_store(path):
     Parameters
     ----------
     path : str
-        A string of the format:
-        path = 'server/database/schema?doc=true&name=yoav/table?whatever=1/root/path.sql'
-
-    You may leave "blank" and then we will default.. so e.g.:
+        A string with '/' as separators of the format:
+        server/database/schema/table/root    
+        
+        The "root" bit, can be itself of a more fancy format: This is the key by which we save the data.
+        root = 'fx/USDJPY/price'
+        
+        The parameters can be left as blank so for example:
+        /database/schema/table/root    
+        will map to the default server (specified in cfg_read)
+        
+        We also support some fancy stuff like:            
+        path = 'server/database/schema?doc=true&name=yoav/table?whatever=1/root/path.sql' but not really useful.
+        
+        You may leave "blank" and then we will default.. so e.g.:
         '/database//table/root.sql' is perfectly acceptable and will default to default server and schema
 
     Returns

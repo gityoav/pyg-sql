@@ -2343,8 +2343,10 @@ class sql_cursor(object):
         return res[columns] if is_str(columns) else res
 
         
-    def to_sql(self, df, index = None, series = None, method = None, params = None, inc = None, **more_inc):
+    def to_sql(self, df, index = None, series = None, method = None, params = None, inc = None, duplicate = None, sort = None, **more_inc):
         """
+        :Parameters:
+        -------------
         df: pd.DataFrame or pd.Series
         
         index: str or None
@@ -2356,16 +2358,28 @@ class sql_cursor(object):
         series: str or None:
             name of the column if df is a series
             
-        method: str
+        method: str or callable.
             We are going to allow various methods of sending data to sql...
+
         1) insert: ignore any duplicates with existing data
         2) replace: delete any existing data based on params, and then insert
-        3) update: look at duplicates comparing existing values and new values based on params + index, 
-                    delete duplicates FROM THE SQL TABLE and then insert
-        4) append: look at duplicates comparing existing values and new values based on params + index, 
-                    delete duplicates FROM THE dataframe provided and then insert
 
+        For the remaining choice of methods, we have to think how we handle duplicates by index:
+        e.g. for the same date we have two prices: existing in table and new.
         NOTE: update/append require the index to be provided and enforce uniqueness of the index on the dataframe provided
+    
+        3) update:  delete existing duplicates FROM THE SQL TABLE and insert new ones
+        4) append:  delete duplicates FROM THE new dataframe provided 
+        5) some callable(new, existing) function to merge the newly provided dataframe and existing data. 
+    
+        duplicate: str
+            Only used if method is callable and a dataframe of the existing data in table needs to be read using self.read_sql()
+            see sql_cursor.read_sql for explanation
+        
+        sort: str
+            Only used if method is callable and a dataframe of the existing data in table needs to be read using self.read_sql()
+            see sql_cursor.read_sql for explanation
+        
         
         Example:
         ---------
@@ -2405,7 +2419,7 @@ class sql_cursor(object):
         FROM dbo.stock_prices
         1000 records 
    
-        Example: insertion, ignoring duplicates...
+        Example: method = 'insert': ignoring what's already in the table, or any potential duplicates...
         --------
         >>> prices_later = pd.DataFrame(dict(price = np.random.normal(0,1,500),
                                              volume = np.random.randint(0,100, 500)), drange(1,500))
@@ -2418,13 +2432,13 @@ class sql_cursor(object):
         FROM dbo.stock_prices
         2500 records  ### <-------- We now have duplicate data for the history        
 
-        Example: replacing completely
+        Example: method = 'replace': replacing completely existing data
         -----------------------------
         >>> method = 'replace'
         >>> self.to_sql(prices_later, country = 'US', stock = 'tsla', index = 'date', method = 'replace')        
         >>> assert len(self) == 500
         
-        Example: appending: keep existing values but add new ones:
+        Example: method = 'append': keep existing values but add new ones:
         ---------
         >>> full_history_bad = full_history.copy()
         >>> full_history_bad['price'] = 0.0
@@ -2434,10 +2448,12 @@ class sql_cursor(object):
         >>> assert len(self.inc(stock = 'tsla')) == 1500 ## we are back to full history
         >>> assert len(self.inc(stock = 'tsla').exc(price = 0)) == 500 ## we have the original good values
         
-        Example: updating: overwrite table duplicates:
+        Example: method = 'update': overwrite table duplicates:
         ---------
         >>> full_history_bad['price'] = 1.0
-        >>> full_history_bad = full_history_bad.iloc[:1250]
+        >>> df = full_history_bad.iloc[:1250]
+        >>> inc = dict(country = 'US', stock = 'tsla'); index = 'date'
+        >>> method = lambda new, existing: new
         >>> self.to_sql(df = full_history_bad, country = 'US', stock = 'tsla', index = 'date', method = 'update')
         >>> assert len(self.inc(stock = 'tsla')) == 1500 ## we are back to full history
         >>> assert len(self.inc(stock = 'tsla').exc(price = 1)) == 250 ## we overwrote the ones that are duplicate by index
@@ -2470,9 +2486,13 @@ class sql_cursor(object):
             duplicates = n[n.iloc[:,0]>1]
             if len(duplicates) > 0:
                 raise ValueError(f'The dataframe provided contains duplicates: {duplicates}')
-        if method not in ('append', 'update'):
-            raise ValueError(f'method {method} not recognised, needs to be in replace/append/update/insert')
-        existing = self.inc(**inc)[idx].df().set_index(idx)
+        if method in ('update', 'append'):
+            existing = self.inc(**inc)[idx].df().set_index(idx).sort_index() ## all we care are the idx
+        elif callable(method):
+            #existing = self.inc(**inc).df().set_index(idx).sort_index() ## all we care are the idx
+            existing = self.read_sql(inc = inc, index = index, duplicate = duplicate, sort = sort)
+        else:
+            raise ValueError(f'unknown method: {method}. method needs to be append/insert/replace/update or a callable function')            
         if len(existing) == 0:
             res.to_sql(name = self.name, con = self.engine, schema = self.schema, if_exists = 'append', index = True, index_label = index)
             return res
@@ -2482,8 +2502,17 @@ class sql_cursor(object):
         elif method == 'append': ## we remove duplicates from the new data
             res = res.drop(duplicates)
         elif method == 'update': ## we remove duplicates from the table
-            df = dictable(duplicates, idx)
-            self.delete(df, **inc)
+            to_delete = dictable(duplicates, idx)
+            self.delete(to_delete, **inc)
+        elif callable(method):
+            duplicates = sorted(duplicates)
+            new = res.loc[duplicates]
+            existing = existing.loc[duplicates]
+            res = res.drop(duplicates)
+            merged = method(new, existing)
+            res = pd.concat([res, merged])
+            to_delete = dictable(duplicates, idx)
+            self.delete(to_delete, **inc)
         res.to_sql(name = self.name, con = self.engine, schema = self.schema, if_exists = 'append', index = True, index_label = index)
         return res           
         

@@ -2343,7 +2343,7 @@ class sql_cursor(object):
         return res[columns] if is_str(columns) else res
 
         
-    def to_sql(self, df, index = None, series = None, method = None, params = None, inc = None, duplicate = None, sort = None, **more_inc):
+    def to_sql(self, df, index = None, series = None, method = None, params = None, inc = None, duplicate = None, sort = None, chunksize = None, **more_inc):
         """
         :Parameters:
         -------------
@@ -2380,7 +2380,9 @@ class sql_cursor(object):
             Only used if method is callable and a dataframe of the existing data in table needs to be read using self.read_sql()
             see sql_cursor.read_sql for explanation
         
-        
+        chunksize: int/None
+            chunksize used to push the data to the SQL database see pandas df.to_sql() for explanation
+
         Example:
         ---------
 
@@ -2471,12 +2473,12 @@ class sql_cursor(object):
         for k, v in inc.items():
             res[k] = v
         if method is None or method == 'insert': # I don't care about duplicates
-            res.to_sql(name = self.name, con = self.engine, schema = self.schema,
+            res.to_sql(name = self.name, con = self.engine, schema = self.schema, chunksize = chunksize, 
                        if_exists = 'append', index = True if index else False, index_label = index)
             return res
         elif method == 'replace':
             self.inc(**inc).delete()
-            res.to_sql(name = self.name, con = self.engine, schema = self.schema,
+            res.to_sql(name = self.name, con = self.engine, schema = self.schema, chunksize = chunksize, 
                        if_exists = 'append', index = True if index else False, index_label = index)
             return res
         if len(idx) == 0:
@@ -2494,9 +2496,10 @@ class sql_cursor(object):
         else:
             raise ValueError(f'unknown method: {method}. method needs to be append/insert/replace/update or a callable function')            
         if len(existing) == 0:
-            res.to_sql(name = self.name, con = self.engine, schema = self.schema, if_exists = 'append', index = True, index_label = index)
+            res.to_sql(name = self.name, con = self.engine, schema = self.schema, chunksize = chunksize, 
+                       if_exists = 'append', index = True, index_label = index)
             return res
-        duplicates = set(res.index) & set(existing.index)
+        duplicates = sorted(set(res.index) & set(existing.index))
         if len(duplicates) == 0:
             pass
         elif method == 'append': ## we remove duplicates from the new data
@@ -2505,7 +2508,6 @@ class sql_cursor(object):
             to_delete = dictable(duplicates, idx)
             self.delete(to_delete, **inc)
         elif callable(method):
-            duplicates = sorted(duplicates)
             new = res.loc[duplicates]
             existing = existing.loc[duplicates]
             res = res.drop(duplicates)
@@ -2513,6 +2515,7 @@ class sql_cursor(object):
             res = pd.concat([res, merged])
             to_delete = dictable(duplicates, idx)
             self.delete(to_delete, **inc)
-        res.to_sql(name = self.name, con = self.engine, schema = self.schema, if_exists = 'append', index = True, index_label = index)
+        res.to_sql(name = self.name, con = self.engine, schema = self.schema, chunksize = chunksize, 
+                   if_exists = 'append', index = True, index_label = index)
         return res           
         

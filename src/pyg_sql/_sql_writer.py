@@ -106,7 +106,7 @@ def sql_pandas_store(path):
     
     stock_data_float: a non-doc store with value-column which is a float:
         
-        key,                    date,       _asof,      value 
+        key,                    date,       _asof,      float
         ----                    ----        -----       -----
         'AAPL/US/price[open]',  1/1/2001,   NULL        123.2
         'AAPL/US/price[open]',  1/1/2002,   NULL        234.2
@@ -115,7 +115,7 @@ def sql_pandas_store(path):
 
     stock_data_int: a non-doc store with value-column which is int:
         
-        key,                    date,       _asof,      value 
+        key,                    date,       _asof,      int 
         ----                    ----        -----       -----
         'AAPL/US/volume',       1/1/2001,   NULL        1000
         'AAPL/US/volume',       1/1/2002,   NULL        2000

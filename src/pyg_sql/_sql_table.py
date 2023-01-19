@@ -20,6 +20,7 @@ _deleted = 'deleted'
 _archived = 'archived_'
 _pd_is_old = pd.__version__.startswith('0')
 
+
 _types = {str: String, 'str' : String, 
           int : Integer, 'int' : Integer,
           float: Float, 
@@ -28,6 +29,10 @@ _types = {str: String, 'str' : String,
           datetime.datetime : DATETIME, 'datetime' : DATETIME,
           datetime.time: TIME, 'time' : TIME,
           bin : sa.VARBINARY}
+
+## This is what is used for keys that are strings and are part of the primary keys to ensure they can be indexed
+NVARCHAR = sa.NVARCHAR(450) 
+_pk_types = _types | {str : NVARCHAR, 'str' : NVARCHAR} 
 
 _orders = {1 : asc, True: asc, 'asc': asc, asc : asc, -1: desc, False: desc, 'desc': desc, desc: desc}
 
@@ -554,18 +559,18 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
     nullable = nullable or {}
     pks = pk or {}
     if isinstance(pks, list):
-        pks = {k : String for k in pks}
+        pks = {k : str for k in pks}
     elif isinstance(pks, str):
-        pks = {pks : String}
+        pks = {pks : str}
     if isinstance(non_null, list):
-        non_null = {k : String for k in non_null}
+        non_null = {k : str for k in non_null}
     elif isinstance(non_null, str):
-        non_null = {non_null : String}
-    pks.update(non_null)
+        non_null = {non_null : str}
+    #pks.update(non_null)
     if isinstance(nullable, list):
-        nullable = {k : String for k in nullable}
+        nullable = {k : str for k in nullable}
     elif isinstance(nullable, str):
-        nullable = {nullable: String}
+        nullable = {nullable: str}
     if isinstance(table, str):
         table_name = table 
     else:
@@ -595,10 +600,11 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
                     raise ValueError('not sure how to create an automatic item with column %s'%t)
 
     col_names = [col.name for col in cols]
-    non_nulls = [Column(k, _types.get(t, t), nullable = False) for k, t in pks.items() if k not in col_names]
+    pk_cols   = [Column(k, _pk_types.get(t, t), nullable = False) for k, t in pks.items() if k not in col_names]
+    non_nulls = [Column(k, _types.get(t, t), nullable = False) for k, t in non_null.items() if k not in col_names]
     nullables = [Column(k.lower(), _types.get(t, t)) for k, t in nullable.items() if k not in col_names] 
     docs = [Column(doc, String, nullable = True)] if doc else []
-    cols = cols + non_nulls + nullables + docs
+    cols = cols + pk_cols + non_nulls + nullables + docs
 
     ## creation logic:
     if create is None:
@@ -619,8 +625,12 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
             raise ValueError('You seem to be trying to create a table with no columns? Perhaps you are trying to point to an existing table and getting its name wrong?')
         if create is True or (is_str(create) and ('t' in create.lower() or 's' in create.lower() or 'd' in create.lower())):
             logger.info('creating table: %s.%s.%s%s'%(db, schema, table_name, [col.name for col in cols]))
-            tbl = Table(table_name, meta, *cols, schema = schema)            
+            tbl = Table(table_name, meta, *cols, schema = schema)
             meta.create_all(e)
+            idx_keys = [tbl.c[key] for key in pks]
+            if pks:
+                idx = sa.Index("idx_pks", *idx_keys, unique=True)
+                idx.create(e)
         else:
             raise ValueError(f'table {table_name} does not exist. You need to explicitly set create=True or create="t/s/d" to mandate table creation')
     res = sql_cursor(table = tbl, schema = schema, db = db, server = server, engine = e, 
@@ -1026,6 +1036,50 @@ class sql_cursor(object):
             self.session = session_maker(self.engine)
         self.session.dry_run = dry_run
         return self
+
+    def create_index(self, name, *columns, unique = False):
+        """
+        creates an index on the table. If an existing index exists matching the same definitions, will raise rather than create the same.
+        
+        Parameters:
+        -----------
+        name: str
+            index name
+        
+        columns: strs
+            names of columns in new index
+            
+        unique: bool
+            is it a unique index
+            
+        See sqlalchemy.Index for full description of the parameters above
+        
+        Example:
+        -------
+        >>> from pyg import * 
+        >>> self = sql_binary_store('DESKTOP-GOQ0NSM/test_db/dbo/binary_store_indexed_on_key/%some/%other.sql').cursor
+        >>> idx = self.create_index('idx_pks', 'key', unique = True)
+        >>> assert len(self.table.indexes) == 1
+
+        Example: fail where trying to create an index which is the same
+        -------
+        >>> import pytest
+        >>> with pytest.raises(ValueError):
+        >>>     idx = self.create_index('not_same_name_but_same_definition', 'key', unique = True)
+        >>> assert len(self.table.indexes) == 1
+
+        """
+        table = self.table
+        column_names = self._col(columns)
+        ## we check for existence pre creation
+        for i in table.indexes: 
+            if sorted([c.name for c in i.columns]) == sorted(column_names) and i.unique == unique:
+                if i.name != name:
+                    raise ValueError(f'{i.name} index already exists with same keys and uniqueness')
+                else:
+                    return i
+        columns = [table.c[col] for col in column_names]        
+        return sa.Index(name, *columns, unique = unique).create(self.engine)
 
     
     def execute(self, statement, *args, transform = None, **kwargs):
@@ -2153,7 +2207,7 @@ class sql_cursor(object):
         ----------
         inc : dict, optional
             filtering the table as "include". The default is None.
-        columns : str/list, optional
+        columns : str/list/dict, optional
             Names of the columns. The default is None, which returns all columns except the one in filters or in index
         index : str, optional
             name of the index.
@@ -2334,11 +2388,13 @@ class sql_cursor(object):
         idx = as_list(index)
         if columns is None:
             cols = ulist(self.columns) - list(inc.keys()) - idx
+        if isinstance(columns, (str, list)):
+            cols = {col : col for col in as_list(columns)}
         else:
-            cols = as_list(columns)
+            cols = columns
         if len(cols) == 0:
-            raise ValueError('no columns selected to load')
-        table = self.inc(**inc)[cols+ idx]
+            raise ValueError('no columns selected to load')            
+        table = self.inc(**inc)[ ulist(cols.keys()) + idx]
         if sort:
             table = table.sort(sort)
         df = table.df(coerce_float = coerce_float)            
@@ -2359,7 +2415,7 @@ class sql_cursor(object):
         return res[columns] if is_str(columns) else res
 
         
-    def to_sql(self, df, index = None, series = None, method = None, params = None, inc = None, duplicate = None, sort = None, chunksize = None, upload_xor = True, **more_inc):
+    def to_sql(self, df, index = None, columns = None, series = None, method = None, params = None, inc = None, duplicate = None, sort = None, chunksize = None, upload_xor = True, **more_inc):
         """
         :Parameters:
         -------------
@@ -2376,6 +2432,9 @@ class sql_cursor(object):
             
         method: str or callable.
             We are going to allow various methods of sending data to sql...
+
+        columns: None or dict
+            you may need to rename some columns prior to insertion. 
 
         1) insert: ignore any duplicates with existing data
         2) replace: delete any existing data based on params, and then insert
@@ -2408,8 +2467,9 @@ class sql_cursor(object):
         ---------
 
         >>> from pyg import * 
+        >>> server = 'DESKTOP-GOQ0NSM' # 'DESKTOP-LU5C5QF'
         >>> import datetime
-        >>> self = sql_table(table = 'stock_prices', db = 'test_db', schema = 'dbo', server = 'DESKTOP-LU5C5QF',
+        >>> self = sql_table(table = 'stock_prices', db = 'test_db', schema = 'dbo', server = server, create = True,
                              non_null = dict(country = str, stock = str, 
                                              date = datetime.datetime, 
                                              price = float, 
@@ -2422,7 +2482,8 @@ class sql_cursor(object):
         >>> inc = dict(stock = 'tsla', country = 'US'); index = 'date'; kwargs = {}
         >>> tsla = pd.DataFrame(dict(price = np.random.normal(0,1,1000),
                                              volume = np.random.randint(0,100, 1000)), drange(-999))
-        >>> self.to_sql(tsla, country = 'US', stock = 'tsla', index = 'date')
+        >>> encoded = self.to_sql(tsla, country = 'US', stock = 'tsla', index = 'date')
+        >>> decode(encoded)        
                 
                        price  volume country stock
         date                                      
@@ -2488,8 +2549,30 @@ class sql_cursor(object):
         index = index or df.index.name
         idx = as_list(index)
         res = pd.DataFrame(df)
+        if columns is None:
+            columns = columns_ = {col : col for col in res.columns}
+            if len(columns) < len(res.columns):
+                raise ValueError(f'cannot insert non unique columns {res.columns}')
+        elif isinstance(columns, list):
+            columns = columns_ = {col : col for col in columns}
+        elif isinstance(columns, str):
+            columns = columns_ = {columns: columns}
+        else: ## we are renaming columns as well as selecting them
+            columns_ = {v: k for k, v in columns.items()}
+            if len(columns_) < len(columns):
+                raise ValueError('cannot insert non-unique column ids')
+        res = res[list(columns.keys())].rename(columns = columns)
+        rtn = dict(_obj = pd_read_sql, 
+                   server = self.server,
+                   db = self.db,
+                   schema = self.schema,
+                   table = self.name,
+                   inc = inc, 
+                   columns = columns_, 
+                   index = index,
+                   duplicate = duplicate, sort = sort)
         if len(res) == 0:
-            return res
+            return rtn
         res.index.name = index
         for k, v in params.items():
             res[k] = v
@@ -2498,12 +2581,12 @@ class sql_cursor(object):
         if method is None or method == 'insert': # I don't care about duplicates
             res.to_sql(name = self.name, con = self.engine, schema = self.schema, chunksize = chunksize, 
                        if_exists = 'append', index = True if index else False, index_label = index)
-            return res
+            return rtn
         elif method == 'replace':
             self.inc(**inc).delete()
             res.to_sql(name = self.name, con = self.engine, schema = self.schema, chunksize = chunksize, 
                        if_exists = 'append', index = True if index else False, index_label = index)
-            return res
+            return rtn
         if len(idx) == 0:
             raise ValueError(f'cannot {method} based on an index, unless an index is provided')
         n = res.groupby(idx).count()
@@ -2521,12 +2604,12 @@ class sql_cursor(object):
         if len(existing) == 0:
             res.to_sql(name = self.name, con = self.engine, schema = self.schema, chunksize = chunksize, 
                        if_exists = 'append', index = True, index_label = index)
-            return res
+            return rtn
         duplicates = sorted(set(res.index) & set(existing.index))
         if not upload_xor:
             res = res.loc[duplicates]
             if len(res) == 0:
-                return res               
+                return rtn
         if len(duplicates) == 0:
             pass
         elif method == 'append': ## we remove duplicates from the new data
@@ -2545,7 +2628,7 @@ class sql_cursor(object):
         if len(res) > 0:
             res.to_sql(name = self.name, con = self.engine, schema = self.schema, chunksize = chunksize, 
                        if_exists = 'append', index = True, index_label = index)
-        return res           
+        return rtn
 
 
 def pd_to_sql(df, table = None, db = None, server = None, schema = None, index = None, 

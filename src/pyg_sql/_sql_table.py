@@ -11,6 +11,7 @@ from copy import copy
 from pyg_base import logger, is_regex
 from functools import partial
 import pandas as pd
+import numpy as np
 _CHUNK = 100
 
 _id = '_id'
@@ -21,17 +22,23 @@ _archived = 'archived_'
 _pd_is_old = pd.__version__.startswith('0')
 
 
+NVARCHAR = sa.NVARCHAR(450) 
+VARCHAR = sa.VARCHAR(450)
 _types = {str: String, 'str' : String, 
           int : Integer, 'int' : Integer,
           float: Float, 
-          'dec' : sa.DECIMAL(0), 'dec1' : sa.DECIMAL(1), 'dec2' : sa.DECIMAL(2), 'dec3' : sa.DECIMAL(3), 'dec4' : sa.DECIMAL(4), 'dec5' : sa.DECIMAL(5), 
+          np.int64 : sa.BigInteger, 'bigint' : sa.BigInteger,
+          'nvarchar' : NVARCHAR,
+          'varchar' : VARCHAR,
+          'dec' : sa.DECIMAL(0),  'dec1' : sa.DECIMAL(1), 'dec2' : sa.DECIMAL(2), 'dec3' : sa.DECIMAL(3), 'dec4' : sa.DECIMAL(4), 
+                                  'dec5' : sa.DECIMAL(5), 'dec6' : sa.DECIMAL(6), 'dec7' : sa.DECIMAL(7), 'dec8' : sa.DECIMAL(8), 
           datetime.date: DATE, 'date' : DATE,
           datetime.datetime : DATETIME, 'datetime' : DATETIME,
           datetime.time: TIME, 'time' : TIME,
+          
           bin : sa.VARBINARY}
 
 ## This is what is used for keys that are strings and are part of the primary keys to ensure they can be indexed
-NVARCHAR = sa.NVARCHAR(450) 
 _pk_types = _types | {str : NVARCHAR, 'str' : NVARCHAR} 
 
 _orders = {1 : asc, True: asc, 'asc': asc, asc : asc, -1: desc, False: desc, 'desc': desc, desc: desc}

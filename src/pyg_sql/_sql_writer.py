@@ -9,7 +9,7 @@ from pyg_base._bitemporal import _asof
 
 sql_table_ = cache(sql_table)
 _sql = '.sql'
-_ts = '.ts'
+_pd = '.pd'
 _dictable = '.dictable'
 _dictable_decode = encode(dictable_decode)
 _key = 'key'
@@ -66,6 +66,80 @@ def _parse_path(path):
     doc = dict(true = True, false = False).get(doc.lower(), doc)        
     return connections + dict(doc = doc, schema = schema, db = db, server = server, root = root, table = table,
                               path = '%s/%s/%s/%s/%s'%(server, db, schema, table, root))
+    
+
+def sql_pandas_store(path):
+    """
+    Suppose we want to support a document store where the only large objects within it are pandas dataframes
+
+    Let us take an example:
+        
+    Suppose we have stocks documents in stocks table unique by 'stock' and 'exchange'. 
+    
+    The database constructor should look like:
+    
+    >>> db = partial(sql_table, server = server, db = db, table = 'stocks', 
+                         pk = ['stock', 'exchange'], doc = True, 
+                         writer = 'server/db/schema/stock_data/%stock/%exchange.pd')
+
+    >>> doc = db_cell(stock = 'AAPL', 
+                      exchange = 'US', 
+                      price = pd.DataFrame(dict(open = ... , high = , low = , close = ..), index), 
+                      volume = pd.Series(...),
+                      db = db)
+    
+    doc.save() will save the document in 'stocks' table but we want price and volume saved in stock_data
+    
+    We will create the following additional table:
+    
+    stock_data: with columns:
+        
+        stock, exchange,    root,               column,     type,   doc
+        -----  --------     ----                ------      ----    --- 
+        'AAPL', 'US',       'AAPL/US/price'     'open'      float   ## code to read data from stock_data_float
+        'AAPL', 'US',       'AAPL/US/price'     'high'      float   ## code to read data from stock_data_float
+        'AAPL', 'US',       'AAPL/US/price'     'low'       float   ## code to read data from stock_data_float
+        'AAPL', 'US',       'AAPL/US/price'     'close'     float   ## code to read data from stock_data_float
+        'AAPL', 'US',       'AAPL/US/volume'    NULL        int     ## code to read data from stock_data_int
+
+    As we save data for various columns, we will create these tables to support saving:
+    
+    stock_data_float: a non-doc store with value-column which is a float:
+        
+        key,                    date,       _asof,      value 
+        ----                    ----        -----       -----
+        'AAPL/US/price[open]',  1/1/2001,   NULL        123.2
+        'AAPL/US/price[open]',  1/1/2002,   NULL        234.2
+        'AAPL/US/price[open]',  1/1/2003,   NULL        356.2
+        'AAPL/US/price[low]',   1/1/2001,   NULL        122.2
+
+    stock_data_int: a non-doc store with value-column which is int:
+        
+        key,                    date,       _asof,      value 
+        ----                    ----        -----       -----
+        'AAPL/US/volume',       1/1/2001,   NULL        1000
+        'AAPL/US/volume',       1/1/2002,   NULL        2000
+        'AAPL/US/volume',       1/1/2003,   NULL        3000
+
+    _asof is a place-holder for bitemporal support.
+
+
+    we will create multiple tables supporting the writer for different types.
+    
+    The dataframe will be stored in a specific format:
+    
+    main table:
+        contains the dataframe definitions:
+            - the original document keys, so that they can 
+            - columns
+            
+        
+    table:
+        contains the root keys, the column name, their types, and a function to read the specific column
+        
+    
+    """
+    
     
 
 

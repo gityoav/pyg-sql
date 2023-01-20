@@ -1,171 +1,87 @@
-from pyg_base import cache, Dict, is_pd, is_arr, is_dict, dictable, cfg_read
-from pyg_sql._sql_table import sql_table, _pairs2connection, _schema, _database, get_server, _types
+from pyg_base import cache, is_pd, is_arr, is_dict, dictable
+from pyg_sql._sql_table import sql_table
 from pyg_encoders import encode, cell_root, root_path, root_path_check, dictable_decode, WRITERS
+from pyg_sql._parse import _parse_path
 
 import pandas as pd
 import pickle
-import re
-from pyg_base._bitemporal import _asof 
 
 sql_table_ = cache(sql_table)
-_sql = '.sql'
-_pd = '.pd'
 _dictable = '.dictable'
 _dictable_decode = encode(dictable_decode)
+
+_sql = '.sql'
 _key = 'key'
 _data = 'data'
-_date = 'date'
-_variable_name = re.compile('^[A-Za-z]+[A-Za-z0-9_]*')
 
-
-def _parse_variable_name(key):
-    """
-    >>> key = 'param_49(date)'
-    >>> 
-    """
-    name = _variable_name.search(key).group(0)
-    return name
-
-def _parse_variable_type(key, name):
-    remain = key[len(name):]
-    if remain.startswith('('):
-        return _types[remain[1:].split(')')[0].lower()]
-    else:
-        return _types[str]
-
-def _parse_root(root):
-    if '.' in root:
-        suffix = root.split('.')[-1]
-        root = root[: -1 - len(suffix)]
-    else:
-        suffix = None
-    keys = root.split('%')[1:]
-    names = [_parse_variable_name(key) for key in keys]
-    types = [_parse_variable_type(key, name) for key, name in zip(keys, names)]
-    columns = dict(zip(names, types))
-    root = '/'.join(['%' + name for name in names])
-    return Dict(root = root, columns = columns, suffix = suffix)
-
-
-def _parse_path(path):
-    params = []
-    ps = path.split('/')
-    if len(ps) < 5:
-        raise ValueError('%s must have at least five items: server/database/schema/table/root'%path)
-    for i in range(len(ps)):
-        if '?' in ps[i]:
-            ps[i], prm = ps[i].split('?')
-            params.extend(prm.split('&'))            
-    connections = Dict(_pairs2connection(*params))
-    server, db, schema, table = ps[:4]
-    root = '/'.join(ps[4:])
-    server = get_server(server or connections.pop('server',None))
-    db = _database(db or connections.pop('db',None))
-    schema = _schema(schema or connections.pop('schema', None))
-    doc = connections.pop('doc', 'true')
-    doc = dict(true = True, false = False).get(doc.lower(), doc)        
-    return connections + dict(doc = doc, schema = schema, db = db, server = server, root = root, table = table,
-                              path = '%s/%s/%s/%s/%s'%(server, db, schema, table, root))
-    
-
-def sql_pandas_store(path):
-    """
-    Suppose we want to support a document store where the only large objects within it are pandas dataframes
-
-    Let us take an example:
-        
-    Suppose we have stocks documents in stocks table unique by 'stock' and 'exchange'. 
-    
-    The database constructor should look like:
-    
-    >>> db = partial(sql_table, server = server, db = db, table = 'stocks', 
-                         pk = ['stock', 'exchange'], doc = True, 
-                         writer = 'server/db/schema/stock_data/%stock/%exchange.pd')
-
-    >>> doc = db_cell(stock = 'AAPL', 
-                      exchange = 'US', 
-                      price = pd.DataFrame(dict(open = ... , high = , low = , close = ..), index), 
-                      volume = pd.Series(...),
-                      db = db)
-    
-    doc.save() will save the document in 'stocks' table but we want price and volume saved in stock_data
-    
-    We will create the following additional table:
-    
-    stock_data: with columns:
-        
-        stock, exchange,    root,               column,     type,   doc
-        -----  --------     ----                ------      ----    --- 
-        'AAPL', 'US',       'AAPL/US/price'     'open'      float   ## code to read data from stock_data_float
-        'AAPL', 'US',       'AAPL/US/price'     'high'      float   ## code to read data from stock_data_float
-        'AAPL', 'US',       'AAPL/US/price'     'low'       float   ## code to read data from stock_data_float
-        'AAPL', 'US',       'AAPL/US/price'     'close'     float   ## code to read data from stock_data_float
-        'AAPL', 'US',       'AAPL/US/volume'    NULL        int     ## code to read data from stock_data_int
-
-    As we save data for various columns, we will create these tables to support saving:
-    
-    stock_data_float: a non-doc store with value-column which is a float:
-        
-        key,                    date,       _asof,      float
-        ----                    ----        -----       -----
-        'AAPL/US/price[open]',  1/1/2001,   NULL        123.2
-        'AAPL/US/price[open]',  1/1/2002,   NULL        234.2
-        'AAPL/US/price[open]',  1/1/2003,   NULL        356.2
-        'AAPL/US/price[low]',   1/1/2001,   NULL        122.2
-
-    stock_data_int: a non-doc store with value-column which is int:
-        
-        key,                    date,       _asof,      int 
-        ----                    ----        -----       -----
-        'AAPL/US/volume',       1/1/2001,   NULL        1000
-        'AAPL/US/volume',       1/1/2002,   NULL        2000
-        'AAPL/US/volume',       1/1/2003,   NULL        3000
-
-    _asof is a place-holder for bitemporal support.
-
-
-    we will create multiple tables supporting the writer for different types.
-    
-    The dataframe will be stored in a specific format:
-    
-    main table:
-        contains the dataframe definitions:
-            - the original document keys, so that they can 
-            - columns
-            
-        
-    table:
-        contains the root keys, the column name, their types, and a function to read the specific column
-        
-    
-    """
-    
     
 
 
 def sql_binary_store(path):
     """
-    splits a path which resembles a sql-alchemy connection string, to its bits
-
+    A binary store is a table with two keys {'key': str, 'data': binary}
+    
+    It is used to store generic objects in a document.
+    
     Parameters
     ----------
     path : str
         A string with '/' as separators of the format:
-        server/database/schema/table/root    
-        
-        The "root" bit, can be itself of a more fancy format: This is the key by which we save the data.
-        root = 'fx/USDJPY/price'
-        
-        The parameters can be left as blank so for example:
-        /database/schema/table/root    
-        will map to the default server (specified in cfg_read)
-        
-        We also support some fancy stuff like:            
-        path = 'server/database/schema?doc=true&name=yoav/table?whatever=1/root/path.sql' but not really useful.
-        
-        You may leave "blank" and then we will default.. so e.g.:
-        '/database//table/root.sql' is perfectly acceptable and will default to default server and schema
 
+    The path is composed of two parts:
+        
+        1) The location of the table is constructed using the first part of the path: server/db/schema/table 
+        2) The "root", determining how a key is constructed for the entire document.
+
+    Example: The base: table location
+    --------
+    >>> base = 'server/db/schema/table'  # maps to table 'table' in schema 'schema' in database 'db' in server 'server'
+    
+    The parameters can be left as blank so for example:
+    
+    >>> base  = '/database/schema/table'  # will map to the default server (specified in cfg_read)
+
+    We also support some fancy parsing of additional parameters like:            
+    
+    >>> from pyg_sql._parse import _parse_path
+    >>> _parse_path('server/database/schema?doc=true&name=yoav/table?whatever=1/root/from/now/on/path.sql')
+    
+    {'name': 'yoav',
+     'whatever': '1',
+     'doc': True,
+     'schema': 'schema',
+     'db': 'database',
+     'server': 'server',
+     'root': 'root/from/now/on/path.sql',
+     'table': 'table',
+     'path': 'server/database/schema/table/root/from/now/on/path.sql'}
+    
+    
+    Example: The root
+    --------
+    Suppose doc has a specific shape:
+            
+    >>> charles_salary = pd.Series(...)
+    >>> william_school_reports = pd.DataFrame(...)
+    >>> harry_girlfriends = pd.Series(...)
+
+    >>> doc = dict(name = 'Charles', surname = 'Winsdor', salary =charles_salary, 
+                   children = dict(william = dict(age = 42, school = william_school_reports), 
+                                   harry = dict(age = 30, girlfriends = harry_girlfriends)))
+
+    Now if 
+        
+    >>> root = 'employeee/%name/%surname.sql'
+
+    Then when we save this documnent... under these keys:
+    
+    key                                                 data
+    ---                                                 ----
+    employee/Charles/Winsdor/salary                     binary of charles_salary
+    employee/Charles/Winsdor/children/william/school    binary of william_school_reports
+    employee/Charles/Winsdor/children/harry/girlfriends binary of harry_girlfriends
+    
+    
     Returns
     -------
     dict

@@ -607,10 +607,10 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
                     raise ValueError('not sure how to create an automatic item with column %s'%t)
 
     col_names = [col.name for col in cols]
-    pk_cols   = [Column(k, _pk_types.get(t, t), nullable = False) for k, t in pks.items() if k not in col_names]
-    non_nulls = [Column(k, _types.get(t, t), nullable = False) for k, t in non_null.items() if k not in col_names]
-    nullables = [Column(k.lower(), _types.get(t, t)) for k, t in nullable.items() if k not in col_names] 
-    docs = [Column(doc, String, nullable = True)] if doc else []
+    pk_cols   = [Column(k, _pk_types.get(t, t), nullable = False, autoincrement = False) for k, t in pks.items() if k not in col_names]
+    non_nulls = [Column(k, _types.get(t, t), nullable = False, autoincrement = False) for k, t in non_null.items() if k not in col_names]
+    nullables = [Column(k.lower(), _types.get(t, t), nullable = True, autoincrement = False) for k, t in nullable.items() if k not in col_names] 
+    docs = [Column(doc, String, nullable = True, autoincrement = False)] if doc else []
     cols = cols + pk_cols + non_nulls + nullables + docs
 
     ## creation logic:

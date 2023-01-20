@@ -5,10 +5,10 @@ from pyg_encoders import as_reader, as_writer, dumps, loads, encode
 from sqlalchemy import Table, Column, Integer, String, MetaData, Identity, Float, DATE, DATETIME, TIME, select, func, not_, desc, asc
 from sqlalchemy.orm import Session
 from sqlalchemy.engine.base import Engine
-from sqlalchemy.types import NUMERIC, FLOAT, INT
+from sqlalchemy.types import NUMERIC, FLOAT, INT, Boolean
 import datetime
 from copy import copy
-from pyg_base import logger, is_regex
+from pyg_base import logger, is_regex, dt
 from functools import partial
 import pandas as pd
 import numpy as np
@@ -24,19 +24,22 @@ _pd_is_old = pd.__version__.startswith('0')
 
 NVARCHAR = sa.NVARCHAR(450) 
 VARCHAR = sa.VARCHAR(450)
-_types = {str: String, 'str' : String, 
-          int : Integer, 'int' : Integer,
-          float: Float, 
+_types = {str: String, 'str' : String, 's': String,
+          int : Integer, 'int' : Integer, 'i' : Integer,
+          float: Float, 'float': Float, 'f': Float,
+          bool : Boolean, 'bool' : Boolean, 'b' : Boolean,
           np.int64 : sa.BigInteger, 'bigint' : sa.BigInteger,
-          'nvarchar' : NVARCHAR,
-          'varchar' : VARCHAR,
+          'nvarchar' : NVARCHAR, 'n' : NVARCHAR,
+          'varchar' : VARCHAR, 'v' : VARCHAR,
           'dec' : sa.DECIMAL(0),  'dec1' : sa.DECIMAL(1), 'dec2' : sa.DECIMAL(2), 'dec3' : sa.DECIMAL(3), 'dec4' : sa.DECIMAL(4), 
                                   'dec5' : sa.DECIMAL(5), 'dec6' : sa.DECIMAL(6), 'dec7' : sa.DECIMAL(7), 'dec8' : sa.DECIMAL(8), 
-          datetime.date: DATE, 'date' : DATE,
-          datetime.datetime : DATETIME, 'datetime' : DATETIME,
-          datetime.time: TIME, 'time' : TIME,
-          
-          bin : sa.VARBINARY}
+          '0' : sa.DECIMAL(0),  '1' : sa.DECIMAL(1), '2' : sa.DECIMAL(2), '3' : sa.DECIMAL(3), '4' : sa.DECIMAL(4), 
+                                  '5' : sa.DECIMAL(5), '6' : sa.DECIMAL(6), '7' : sa.DECIMAL(7), '8' : sa.DECIMAL(8), 
+          datetime.date: DATE, 'date' : DATE, 'd' : DATETIME,
+          datetime.datetime : DATETIME, 'datetime' : DATETIME, 'dt' : DATETIME, dt : DATETIME, 'e' : DATETIME,
+          datetime.time: TIME, 'time' : TIME, 't' : TIME,
+          bin : sa.VARBINARY, 'y': sa.VARBINARY}
+
 
 ## This is what is used for keys that are strings and are part of the primary keys to ensure they can be indexed
 _pk_types = _types | {str : NVARCHAR, 'str' : NVARCHAR} 

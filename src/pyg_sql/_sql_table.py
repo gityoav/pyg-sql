@@ -5,7 +5,7 @@ from pyg_encoders import as_reader, as_writer, dumps, loads, encode
 from sqlalchemy import Table, Column, Integer, String, MetaData, Identity, Float, DATE, DATETIME, TIME, select, func, not_, desc, asc
 from sqlalchemy.orm import Session
 from sqlalchemy.engine.base import Engine
-from sqlalchemy.types import NUMERIC, FLOAT, INT, Boolean
+from sqlalchemy.types import NUMERIC, FLOAT, INT, Boolean, DECIMAL
 import datetime
 from copy import copy
 from pyg_base import logger, is_regex, dt
@@ -20,6 +20,7 @@ _root = 'root'
 _deleted = 'deleted'
 _archived = 'archived_'
 _pd_is_old = pd.__version__.startswith('0')
+_index = 'index'
 
 
 NVARCHAR = sa.NVARCHAR(450) 
@@ -28,17 +29,22 @@ _types = {str: String, 'str' : String, 's': String,
           int : Integer, 'int' : Integer, 'i' : Integer,
           float: Float, 'float': Float, 'f': Float,
           bool : Boolean, 'bool' : Boolean, 'b' : Boolean,
-          np.int64 : sa.BigInteger, 'bigint' : sa.BigInteger,
+          np.int64 : sa.BigInteger, 'bigint' : sa.BigInteger, 'g' : sa.BigInteger,
           'nvarchar' : NVARCHAR, 'n' : NVARCHAR,
           'varchar' : VARCHAR, 'v' : VARCHAR,
-          'dec' : sa.DECIMAL(0),  'dec1' : sa.DECIMAL(1), 'dec2' : sa.DECIMAL(2), 'dec3' : sa.DECIMAL(3), 'dec4' : sa.DECIMAL(4), 
-                                  'dec5' : sa.DECIMAL(5), 'dec6' : sa.DECIMAL(6), 'dec7' : sa.DECIMAL(7), 'dec8' : sa.DECIMAL(8), 
-          '0' : sa.DECIMAL(0),  '1' : sa.DECIMAL(1), '2' : sa.DECIMAL(2), '3' : sa.DECIMAL(3), '4' : sa.DECIMAL(4), 
-                                  '5' : sa.DECIMAL(5), '6' : sa.DECIMAL(6), '7' : sa.DECIMAL(7), '8' : sa.DECIMAL(8), 
+          'dec' : DECIMAL(0),  'dec1' : DECIMAL(1), 'dec2' : DECIMAL(2), 'dec3' : DECIMAL(3), 'dec4' : DECIMAL(4), 
+                                  'dec5' : DECIMAL(5), 'dec6' : DECIMAL(6), 'dec7' : DECIMAL(7), 'dec8' : DECIMAL(8), 
+          '0' : DECIMAL(0),  '1' : DECIMAL(1), '2' : DECIMAL(2), '3' : DECIMAL(3), '4' : DECIMAL(4), 
+                                  '5' : DECIMAL(5), '6' : DECIMAL(6), '7' : DECIMAL(7), '8' : DECIMAL(8), 
           datetime.date: DATE, 'date' : DATE, 'd' : DATETIME,
           datetime.datetime : DATETIME, 'datetime' : DATETIME, 'dt' : DATETIME, dt : DATETIME, 'e' : DATETIME,
           datetime.time: TIME, 'time' : TIME, 't' : TIME,
           bin : sa.VARBINARY, 'y': sa.VARBINARY}
+
+_type_codes = {String : 's', Integer : 'i', Float : 'f', Boolean: 'b', sa.BigInteger : 'g', 
+               NVARCHAR : 'n', NVARCHAR : 'v', DATE : 'd', TIME: 't', DATETIME : 'e', sa.VARBINARY: 'y',
+               DECIMAL(0): '0', DECIMAL(1): '1', DECIMAL(2): '2', DECIMAL(3): '3', DECIMAL(4): '4', 
+               DECIMAL(5): '5', DECIMAL(6): '6', DECIMAL(7): '7', DECIMAL(8): '8'}
 
 
 ## This is what is used for keys that are strings and are part of the primary keys to ensure they can be indexed
@@ -242,16 +248,6 @@ class sql_df():
             return pd.Series(self.cursor[value])
         
 
-# def pickle_loads(value):
-#     if isinstance(value, dict):
-#         return type(value)({k: pickle_loads(v) for k, v in value.items()})
-#     elif isinstance(value, (list, tuple)):
-#         return type(value)([pickle_loads(v) for v in value])        
-#     elif isinstance(value, bytes):
-#         return pickle.loads(value)
-#     else:
-#         return value
-
 
 @cache
 def _servers():
@@ -438,6 +434,11 @@ def _get_table(table_name, schema, db, server, create, engine = None):
     return Table(table_name, meta, autoload_with = e, schema = schema)
 
 
+def sql_has_table(table_name, schema, db, server, engine = None):
+    e = _get_engine(server = server, db = db, schema = schema, create = False, engine = engine)
+    return sa.inspect(e).has_table(table_name)
+        
+
 def sql_table(table, db = None, non_null = None, nullable = None, _id = None, schema = None, 
               server = None, reader = None, writer = None, pk = None, doc = None, mode = None, 
               spec = None, selection = None, order = None, defaults = None, joint = None, create = None, engine = None):
@@ -561,6 +562,8 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         doc = table.doc if doc is None else doc
         pk = table.pk if pk is None else pk
         table = table.name
+    else:
+        raise ValueError(f'not sure what table is: {table}')
     
     ### we resolve some parameters
     if doc is True: #user wants a doc
@@ -623,11 +626,13 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
     ## time to access/create tables        
     e = _get_engine(server = server, db = db, schema = schema, create = create, engine = engine)
     schema = create_schema(e, _schema(schema), create = create)
-    try:
+    if sa.inspect(e).has_table(table):    
+    #try:
         tbl = _get_table(table_name = table_name, schema = schema, db = db, server = server, create = create, engine = e) ## by default we grab the existing table
         if doc is None and _doc in [col.name for col in tbl.columns]:
             doc = _doc
-    except sa.exc.NoSuchTableError:        
+    else:
+    #except sa.exc.NoSuchTableError:        
         if doc is None and len(non_null) == 0 and len(nullable) == 0: #user specified nothing but pk so assume table should contain SOMETHING :-)
             doc = _doc
         meta = MetaData()
@@ -639,7 +644,7 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
             meta.create_all(e)
             idx_keys = [tbl.c[key] for key in pks]
             if pks:
-                idx = sa.Index("idx_pks", *idx_keys, unique=True)
+                idx = sa.Index('_'.join(sorted(pks)), *idx_keys, unique=True)
                 idx.create(e)
         else:
             raise ValueError(f'table {table_name} does not exist. You need to explicitly set create=True or create="t/s/d" to mandate table creation')
@@ -1047,20 +1052,21 @@ class sql_cursor(object):
         self.session.dry_run = dry_run
         return self
 
-    def create_index(self, name, *columns, unique = False):
+    def create_index(self, *columns, name = None, unique = False):
         """
-        creates an index on the table. If an existing index exists matching the same definitions, will raise rather than create the same.
+        Creates an index on the table. If an existing index exists matching the same definitions, will raise rather than create the same.
+        We deliberately want you NOT to specify name unless you really feel it... name defaults to sorted column names joined together.
         
         Parameters:
-        -----------
-        name: str
-            index name
-        
+        -----------        
         columns: strs
             names of columns in new index
             
         unique: bool
             is it a unique index
+
+        name: str
+            index name
             
         See sqlalchemy.Index for full description of the parameters above
         
@@ -1081,6 +1087,7 @@ class sql_cursor(object):
         """
         table = self.table
         column_names = self._col(columns)
+        name = name or '_'.join(sorted(column_names))
         ## we check for existence pre creation
         for i in table.indexes: 
             if sorted([c.name for c in i.columns]) == sorted(column_names) and i.unique == unique:
@@ -2425,7 +2432,7 @@ class sql_cursor(object):
         return res[columns] if is_str(columns) else res
 
         
-    def to_sql(self, df, index = None, columns = None, series = None, method = None, params = None, inc = None, duplicate = None, sort = None, chunksize = None, upload_xor = True, **more_inc):
+    def to_sql(self, df, index = None, columns = None, series = None, method = None, inc = None, duplicate = None, sort = None, chunksize = None, upload_xor = True, **more_inc):
         """
         :Parameters:
         -------------
@@ -2434,8 +2441,8 @@ class sql_cursor(object):
         index: str or None
             name of the index
         
-        params: dict
-            filter to define uniqueness
+        inc: dict
+            a filter to define uniqueness
         
         series: str or None:
             name of the column if df is a series
@@ -2553,112 +2560,277 @@ class sql_cursor(object):
         >>> assert len(self.inc(stock = 'tsla').exc(price = 1)) == 250 ## we overwrote the ones that are duplicate by index
                 
         """
-        params = params or {}
-        inc = inc or {}
-        inc.update(more_inc)
-        index = index or df.index.name
-        idx = as_list(index)
-        res = pd.DataFrame(df)
-        if columns is None:
-            columns = columns_ = {col : col for col in res.columns}
-            if len(columns) < len(res.columns):
-                raise ValueError(f'cannot insert non unique columns {res.columns}')
-        elif isinstance(columns, list):
-            columns = columns_ = {col : col for col in columns}
-        elif isinstance(columns, str):
-            columns = columns_ = {columns: columns}
-        else: ## we are renaming columns as well as selecting them
-            columns_ = {v: k for k, v in columns.items()}
-            if len(columns_) < len(columns):
-                raise ValueError('cannot insert non-unique column ids')
-        res = res[list(columns.keys())].rename(columns = columns)
-        rtn = dict(_obj = pd_read_sql, 
-                   server = self.server,
-                   db = self.db,
-                   schema = self.schema,
-                   table = self.name,
-                   inc = inc, 
-                   columns = columns_, 
-                   index = index,
-                   duplicate = duplicate, sort = sort)
-        if len(res) == 0:
-            return rtn
-        res.index.name = index
-        for k, v in params.items():
-            res[k] = v
-        for k, v in inc.items():
-            res[k] = v
-        if method is None or method == 'insert': # I don't care about duplicates
-            res.to_sql(name = self.name, con = self.engine, schema = self.schema, chunksize = chunksize, 
-                       if_exists = 'append', index = True if index else False, index_label = index)
-            return rtn
-        elif method == 'replace':
-            self.inc(**inc).delete()
-            res.to_sql(name = self.name, con = self.engine, schema = self.schema, chunksize = chunksize, 
-                       if_exists = 'append', index = True if index else False, index_label = index)
-            return rtn
-        if len(idx) == 0:
-            raise ValueError(f'cannot {method} based on an index, unless an index is provided')
-        n = res.groupby(idx).count()
-        if len(n) < len(res):
-            duplicates = n[n.iloc[:,0]>1]
-            if len(duplicates) > 0:
-                raise ValueError(f'The dataframe provided contains duplicates: {duplicates}')
-        if method in ('update', 'append'):
-            existing = self.inc(**inc)[idx].df().set_index(idx).sort_index() ## all we care are the idx
-        elif callable(method):
-            #existing = self.inc(**inc).df().set_index(idx).sort_index() ## all we care are the idx
-            existing = self.read_sql(inc = inc, index = index, duplicate = duplicate, sort = sort)
-        else:
-            raise ValueError(f'unknown method: {method}. method needs to be append/insert/replace/update or a callable function')            
-        if len(existing) == 0:
-            res.to_sql(name = self.name, con = self.engine, schema = self.schema, chunksize = chunksize, 
-                       if_exists = 'append', index = True, index_label = index)
-            return rtn
-        duplicates = sorted(set(res.index) & set(existing.index))
-        if not upload_xor:
-            res = res.loc[duplicates]
-            if len(res) == 0:
-                return rtn
-        if len(duplicates) == 0:
-            pass
-        elif method == 'append': ## we remove duplicates from the new data
-            res = res.drop(duplicates)
-        elif method == 'update': ## we remove duplicates from the table
-            to_delete = dictable(duplicates, idx)
-            self.delete(to_delete, **inc)
-        elif callable(method):
-            new = res.loc[duplicates]
-            existing = existing.loc[duplicates]
-            res = res.drop(duplicates)
-            merged = method(new, existing)
-            res = pd.concat([res, merged])
-            to_delete = dictable(duplicates, idx)
-            self.delete(to_delete, **inc)
-        if len(res) > 0:
-            res.to_sql(name = self.name, con = self.engine, schema = self.schema, chunksize = chunksize, 
-                       if_exists = 'append', index = True, index_label = index)
-        return rtn
+        return pd_to_sql(df = df, table = self.name, db = self.db, server = self.server, index = index, columns = columns,
+                  series = series, method = method, inc = inc, 
+                  duplicate = duplicate, sort = sort, chunksize = chunksize, 
+                  upload_xor = upload_xor, **more_inc)
 
 
-def pd_to_sql(df, table = None, db = None, server = None, schema = None, index = None, 
-              series = None, method = None, params = None, inc = None, 
+
+def pd_to_sql(df, table = None, db = None, server = None, schema = None, index = None, columns = None,
+              series = None, method = None, inc = None, 
               duplicate = None, sort = None, chunksize = None, 
               upload_xor = True, **more_inc):
     """
-    a thin wrapper around sql_cursor.to_sql()
     
-    Parameters
-    ----------
+    
+    :Parameters:
+    -------------
     table, db, server, schema: str or partial 
         see sql_table constructor
-        
-    all the other parameters: see sql_cursor.to_sql
+
+    df: pd.DataFrame or pd.Series
     
+    index: str or None
+        name of the index
+    
+    inc: dict
+        a filter to define uniqueness
+    
+    series: str or None:
+        name of the column if df is a series
+        
+    method: str or callable.
+        We are going to allow various methods of sending data to sql...
+
+    columns: None or dict
+        you may need to rename some columns prior to insertion. 
+
+    1) insert: ignore any duplicates with existing data
+    2) replace: delete any existing data based on params, and then insert
+
+    For the remaining choice of methods, we have to think how we handle duplicates by index:
+    e.g. for the same date we have two prices: existing in table and new.
+    NOTE: update/append require the index to be provided and enforce uniqueness of the index on the dataframe provided
+
+    3) update:  delete existing duplicates FROM THE SQL TABLE and insert new ones
+    4) append:  delete duplicates FROM THE new dataframe provided 
+    5) some callable(new, existing) function to merge the newly provided dataframe and existing data. 
+
+    upload_xor: bool
+        We may be interested in using a dataframe ONLY for values that exist in the database.
+        i.e. we want to update/merge with existing values but we don't want to add new records
+        xor is the data that is in new but not in existing and if upload_xor = False, this data is dropped
+        
+    duplicate: str
+        Only used if method is callable and a dataframe of the existing data in table needs to be read using self.read_sql()
+        see sql_cursor.read_sql for explanation
+    
+    sort: str
+        Only used if method is callable and a dataframe of the existing data in table needs to be read using self.read_sql()
+        see sql_cursor.read_sql for explanation
+    
+    chunksize: int/None
+        chunksize used to push the data to the SQL database see pandas df.to_sql() for explanation
+
+    Example:
+    ---------
+
+    >>> from pyg import * 
+    >>> server = 'DESKTOP-GOQ0NSM' # 'DESKTOP-LU5C5QF'
+    >>> db = 'test_db'; schema = 'dbo'
+    >>> import datetime
+    >>> self = sql_table(table = 'stock_prices', db = 'test_db', schema = 'dbo', server = server, create = True,
+                         non_null = dict(country = str, stock = str, 
+                                         date = datetime.datetime, 
+                                         price = float, 
+                                         volume = int))
+
+    >>> self.delete()
+
+    Example: simple insert
+    ----------------------
+    >>> inc = dict(stock = 'tsla', country = 'US'); index = 'date'; kwargs = {}
+    >>> tsla = pd.DataFrame(dict(price = np.random.normal(0,1,1000),
+                                         volume = np.random.randint(0,100, 1000)), drange(-999))
+    >>> encoded = pd_to_sql(df = tsla, db = db, server = server, schema = schema, table = 'stock_prices', country = 'US', stock = 'tsla', index = 'date')
+    >>> assert eq(decode(encoded), tsla)
+            
+                   price  volume country stock
+    date                                      
+    2020-04-22 -1.761752       6      US  tsla
+    2020-04-23 -0.110846      99      US  tsla
+    2020-04-24  0.758875       5      US  tsla
+    2020-04-25 -1.028290      63      US  tsla
+    2020-04-26 -0.601785      64      US  tsla
+                 ...     ...     ...   ...
+    2023-01-12 -1.168227      99      US  tsla
+    2023-01-13 -0.026940      74      US  tsla
+
+    >>> self
+    Out[4]: 
+    sql_cursor: test_db.dbo.stock_prices  
+    SELECT country, stock, date, price, volume 
+    FROM dbo.stock_prices
+    1000 records 
+   
+    Example: method = 'insert': ignoring what's already in the table, or any potential duplicates...
+    --------
+    >>> prices_later = pd.DataFrame(dict(price = np.random.normal(0,1,500),
+                                         volume = np.random.randint(0,100, 500)), drange(1,500))
+    >>> full_history = pd.concat([tsla, prices_later])
+    >>> self.to_sql(full_history, country = 'US', stock = 'tsla', index = 'date')        
+
+    >>> self    
+    sql_cursor: test_db.dbo.stock_prices  
+    SELECT country, stock, date, price, volume 
+    FROM dbo.stock_prices
+    2500 records  ### <-------- We now have duplicate data for the history        
+
+    Example: method = 'replace': replacing completely existing data
+    -----------------------------
+    >>> method = 'replace'
+    >>> pd_to_sql(prices_later, table = self, country = 'US', stock = 'tsla', index = 'date', method = 'replace')        
+    >>> assert len(self) == 500
+    
+    Example: method = 'append': keep existing values but add new ones:
+    ---------
+    >>> full_history_bad = full_history.copy()
+    >>> full_history_bad['price'] = 0.0
+    >>> df = full_history_bad; inc = dict(country = 'US', stock = 'tsla'); index = 'date'; method = 'append'
+    >>> self.to_sql(df = full_history_bad, country = 'US', stock = 'tsla', index = 'date', method = 'append')
+    
+    >>> assert len(self.inc(stock = 'tsla')) == 1500 ## we are back to full history
+    >>> assert len(self.inc(stock = 'tsla').exc(price = 0)) == 500 ## we have the original good values
+    
+    Example: method = 'update': overwrite table duplicates:
+    ---------
+    >>> full_history_bad['price'] = 1.0
+    >>> df = full_history_bad.iloc[:1250]
+    >>> inc = dict(country = 'US', stock = 'tsla'); index = 'date'
+    >>> method = lambda new, existing: new
+    >>> self.to_sql(df = full_history_bad, country = 'US', stock = 'tsla', index = 'date', method = 'update')
+    >>> assert len(self.inc(stock = 'tsla')) == 1500 ## we are back to full history
+    >>> assert len(self.inc(stock = 'tsla').exc(price = 1)) == 250 ## we overwrote the ones that are duplicate by index
+            
     """
-    cursor = sql_table(table = table, db = db, server = server, schema = schema)
-    return cursor.to_sql(df = df, index = index, series = series, method = method, params = params, inc = inc,
-                         duplicate = duplicate, sort = sort, chunksize = chunksize, upload_xor = upload_xor, **more_inc)
+    
+    inc = inc or {}
+    inc.update(more_inc)
+    index = index or df.index.name or 'index'
+    idx = as_list(index)
+    res = pd.DataFrame(df)
+    if columns is None:
+        columns = columns_ = {col : col for col in res.columns}
+        if len(columns) < len(res.columns):
+            raise ValueError(f'cannot insert non unique columns {res.columns}')
+    elif isinstance(columns, list):
+        columns = columns_ = {col : col for col in columns}
+    elif isinstance(columns, str):
+        columns = columns_ = {columns: columns}
+    else: ## we are renaming columns as well as selecting them
+        columns_ = {v: k for k, v in columns.items()}
+        if len(columns_) < len(columns):
+            raise ValueError('cannot insert non-unique column ids')
+    res = res[list(columns.keys())].rename(columns = columns)
+    rtn = dict(_obj = pd_read_sql, 
+               server = server,
+               db = db,
+               schema = schema,
+               table = table,
+               inc = inc, 
+               columns = columns_, 
+               index = index,
+               duplicate = duplicate, sort = sort)
+    if len(res) == 0:
+        return rtn
+    res.index.name = index
+    for k, v in inc.items():
+        res[k] = v
+    if isinstance(table, (partial, sql_cursor)):
+        existing_table = sql_table(server = server, db = db, schema = schema, table = table)
+        table = existing_table.table
+    else:
+        engine = _get_engine(server = server, db = db, schema = schema, create = False)
+        if not sa.inspect(engine).has_table(table):
+            res.to_sql(name = table, con = engine, schema = schema, chunksize = chunksize, 
+                       if_exists = 'append', index = True if index else False, index_label = index)
+            return rtn
+        else:
+            existing_table = sql_table(server = server, db = db, schema = schema, table = table)
+    engine = existing_table.engine
+    if method is None or method == 'insert': # I don't care about duplicates
+        res.to_sql(name = table, con = engine, schema = schema, chunksize = chunksize, 
+                   if_exists = 'append', index = True if index else False, index_label = index)
+        return rtn
+    existing_table = sql_table(server = server, db = db, schema = schema, table = table)
+    if method == 'replace':
+        existing_table.inc(**inc).delete()
+        res.to_sql(name = table, con = engine, schema = schema, chunksize = chunksize, 
+                   if_exists = 'append', index = True if index else False, index_label = index)
+        return rtn
+    if len(idx) == 0:
+        raise ValueError(f'cannot {method} based on an index, unless an index is provided')
+    n = res.groupby(idx).count()
+    if len(n) < len(res):
+        duplicates = n[n.iloc[:,0]>1]
+        if len(duplicates) > 0:
+            raise ValueError(f'The dataframe provided contains duplicates: {duplicates}')
+    if method in ('update', 'append'):
+        existing = existing_table.inc(**inc)[idx].df().set_index(idx).sort_index() ## all we care are the idx
+    elif callable(method):
+        #existing = self.inc(**inc).df().set_index(idx).sort_index() ## all we care are the idx
+        existing = existing_table.read_sql(inc = inc, index = index, duplicate = duplicate, sort = sort)
+    else:
+        raise ValueError(f'unknown method: {method}. method needs to be append/insert/replace/update or a callable function')            
+    if len(existing) == 0:
+        res.to_sql(name = table, con = engine, schema = schema, chunksize = chunksize, 
+                   if_exists = 'append', index = True, index_label = index)
+        return rtn
+    duplicates = sorted(set(res.index) & set(existing.index))
+    if not upload_xor:
+        res = res.loc[duplicates]
+        if len(res) == 0:
+            return rtn
+    if len(duplicates) == 0:
+        pass
+    elif method == 'append': ## we remove duplicates from the new data
+        res = res.drop(duplicates)
+    elif method == 'update': ## we remove duplicates from the table
+        to_delete = dictable(duplicates, idx)
+        existing_table.delete(to_delete, **inc)
+    elif callable(method):
+        new = res.loc[duplicates]
+        existing = existing.loc[duplicates]
+        res = res.drop(duplicates)
+        merged = method(new, existing)
+        res = pd.concat([res, merged])
+        to_delete = dictable(duplicates, idx)
+        existing_table.delete(to_delete, **inc)
+    if len(res) > 0:
+        res.to_sql(name = table, con = engine, schema = schema, chunksize = chunksize, 
+                   if_exists = 'append', index = True, index_label = index)
+    return rtn
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    if sa.inspect(engine).has_table(table):    
+        cursor = sql_table(table = table, db = db, server = server, schema = schema)
+        return cursor.to_sql(df = df, index = index, series = series, method = method, inc = inc,
+                         duplicate = duplicate, sort = sort, 
+                         chunksize = chunksize, upload_xor = upload_xor, **more_inc)
+    else:
+
+        res = df.to_sql()
 
 
 def pd_read_sql(table = None, db = None, server = None, schema = None, 

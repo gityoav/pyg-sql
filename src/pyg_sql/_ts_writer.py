@@ -24,40 +24,66 @@ def sql_ts_store(path):
                              key = 'price_data',
                              db = db,
                              price = pd.DataFrame(dict(open = ... , high = , low = , close = ..), index), 
-                             volume = pd.Series(...),
+                             avg_volume = pd.Series(...),
+                             open_int = pd.DataFrame(dict(open_int = values), index = dates)
                              db = db)
     
     >>> legal_doc  = db_cell(stock = 'AAPL',    
                              exchange = 'US', 
-                             key = 'price_data',
+                             key = 'legal_data',
                              db = db,
                              legal_cases = pd.DataFrame(dict(case = ..., court =... judgement = ...))
                             
     
     doc.save() will save the document in 'stocks' table but we want price data saved in stock_price_data table
     and legal_doc data in stock_legal_data
-    
-    
-    Each of the keys WITHIN the document will then have its own structure
-    
-    We will create the following additional table that is created on the fly:
-    
-    stock_price_data|date|open|high|low|close|dffff:
-        
-        key              date    open high low close
-        ---              ----    ---- ---- --- -----
-        'AAPL/US/price'  1/1/23  4.3  4.9  4.2 4.5
-        
-    
-    And volume data will go into this table:
-    
-    stock_price_data|series|i
-        key              date    value
-        ---              ----    ---- 
-        'AAPL/US/price'  1/1/23  121 
-        'AAPL/US/price'  2/1/23  153
 
 
+    There are several questions to answer:
+        Q1) what SQL table structures we want to support
+        Q2) how do we manage re-writes? do we append? replace? update?
+        Q3) how do we manage bitemporal data to ensure a full audit?
+    
+    Q2 & Q3 can be handled with code. Q1 is about the structure of the sql database.
+        
+    Q1: SQL table data structure
+    ----------------------------
+    
+    Each of the pandas timeseries with the document will then have its own column structure.    
+
+    We need a mapping from the dataframe structure to 
+    1) table name 
+    2) table structure
+
+        df -> unique name of table
+        series -> unique name of table
+
+    So for example:
+    price_doc.avg_volume, is a non-bitemporal timeseries pd.Series of int. It will be stored in table called "series"
+
+    "series"
+    key                date    value
+    ---                ----    -----
+    AAPL/US/avg_volume 1/1/01  102.34
+    AAPL/US/avg_volume 1/1/02  234.56
+    
+    price_doc.open_int is a single-column non-bitemporal dataframe. It will be stored in table:
+    open_int|i
+
+
+    
+    
+    Q2: 
+    --------------------------------
+    We will need to handle three distinct types of dataframes:
+    
+    1) timeseries: is_ts(df) 
+    2) bitemporal
+    3) generic dataframe
+    
+    
+    When we write a generic dataframe by key, we simply replace existing data
+    
     
     """
 

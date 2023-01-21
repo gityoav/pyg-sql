@@ -1,7 +1,7 @@
 from pyg_base import cache, is_pd, is_arr, is_dict, dictable
 from pyg_sql._sql_table import sql_table
 from pyg_encoders import encode, cell_root, root_path, root_path_check, dictable_decode, WRITERS
-from pyg_sql._parse import _parse_path
+from pyg_sql._parse import sql_parse_path
 
 import pandas as pd
 import pickle
@@ -87,7 +87,7 @@ def sql_binary_store(path):
     dict
         various connection parameters. specifically, the cursor parameter actually generates the table
     """
-    args = _parse_path(path)
+    args = sql_parse_path(path)
     args.cursor = sql_table(table = args.table, db = args.db, schema = args.schema, 
                        pk = _key, server = args.server, 
                        non_null = {_data : bin}, doc = args.doc)

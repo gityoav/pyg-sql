@@ -1055,7 +1055,7 @@ class sql_cursor(object):
     def create_index(self, *columns, name = None, unique = False):
         """
         Creates an index on the table. If an existing index exists matching the same definitions, will raise rather than create the same.
-        We deliberately want you NOT to specify name unless you really feel it... name defaults to sorted column names joined together.
+        We deliberately want you NOT to specify name unless you really feel it... name defaults to sorted column names joined together
         
         Parameters:
         -----------        
@@ -1613,18 +1613,18 @@ class sql_cursor(object):
             edoc[self.doc] = type(doc)({k : v for k, v in doc.items() if k not in drop})
             return edoc
 
-    def _writer(self, writer = None, doc = None, kwargs = None):
+    def _writer(self, writer = None, doc = None, kwargs = None, df = None):
         doc = doc or {}
         if writer is None:
             writer = doc.get(_root)
         if writer is None:
             writer = self.writer
-        return as_writer(writer, kwargs = kwargs)
+        return as_writer(writer, kwargs = kwargs, df = df)
             
     def _write_doc(self, doc, writer = None, columns = None):
         columns = columns or self.columns
         writer = self._writer(writer, doc = doc, kwargs = doc)
-        res = type(doc)({key: self._write_item(value, writer = writer) for key, value in doc.items() if key in columns})
+        res = type(doc)({key: self._write_item(value, writer = writer, kwargs = doc) for key, value in doc.items() if key in columns})
         #res = self._dock(res, columns = columns) if dock else res
         return res
 
@@ -2710,6 +2710,10 @@ def pd_to_sql(df, table = None, db = None, server = None, schema = None, index =
     index = index or df.index.name or 'index'
     idx = as_list(index)
     res = pd.DataFrame(df)
+    series = series or 'value'
+    if isinstance(df, pd.Series):
+        res.columns = [series]
+    res.columns = [str(col) for col in res.columns]
     if columns is None:
         columns = columns_ = {col : col for col in res.columns}
         if len(columns) < len(res.columns):
@@ -2729,7 +2733,7 @@ def pd_to_sql(df, table = None, db = None, server = None, schema = None, index =
                schema = schema,
                table = table,
                inc = inc, 
-               columns = columns_, 
+               columns = series if isinstance(df, pd.Series) else columns_, 
                index = index,
                duplicate = duplicate, sort = sort)
     if len(res) == 0:
@@ -2804,36 +2808,7 @@ def pd_to_sql(df, table = None, db = None, server = None, schema = None, index =
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    if sa.inspect(engine).has_table(table):    
-        cursor = sql_table(table = table, db = db, server = server, schema = schema)
-        return cursor.to_sql(df = df, index = index, series = series, method = method, inc = inc,
-                         duplicate = duplicate, sort = sort, 
-                         chunksize = chunksize, upload_xor = upload_xor, **more_inc)
-    else:
-
-        res = df.to_sql()
-
-
-def pd_read_sql(table = None, db = None, server = None, schema = None, 
+def pd_read_sql(table = None, db = None, server = None, schema = None,
                 inc = None, columns = None, index = None, coerce_float : bool = True, duplicate = None, sort = None, **more_inc):
     """
     a thin wrapper around sql_cursor.to_sql()
@@ -2847,6 +2822,6 @@ def pd_read_sql(table = None, db = None, server = None, schema = None,
     
     """
     cursor = sql_table(table = table, db = db, server = server, schema = schema)
-    return cursor.read_sql(inc = inc, index = index, columns = columns, coerce_float = coerce_float, 
+    return cursor.read_sql(inc = inc, index = index, columns = columns, coerce_float = coerce_float,
                            duplicate = duplicate, sort = sort, **more_inc)
     

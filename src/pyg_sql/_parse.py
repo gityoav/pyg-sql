@@ -1,4 +1,4 @@
-from pyg_base import dictattr, is_date
+from pyg_base import dictattr, is_date, is_pd
 from pyg_encoders import root_path
 from pyg_sql._sql_table import _types, _type_codes, get_server, _database, _pairs2connection, _schema
 import re
@@ -59,16 +59,21 @@ def _array_type(arr):
         raise ValueError(f'cannot parse column type "{tp}" for array with these values: {arr[:2]}')
 
 
-def _parse_table(table, inc = None, df = None):
+def _sql_parse_table(table, inc = None, df = None, sep = '_'):
     """
     returns a dict with 'table' as well as pk/nullable
+    >>> table = ''
+    >>> inc = None
+    >>> df = pd.DataFrame(dict(a = [1,2], b = [1., 2.], c = drange(1)), drange(1))
+    >>> assert _sql_parse_table(table = '', df = df)['table'] == 'a_b_c_ife'
+    
     """
     if df is None and inc is None:
         return dict(table = table)
     inc = inc or {}
     table = root_path(inc, table)
     if not table:
-        table = '|'
+        table = sep
 
     res = {}
     if inc:
@@ -84,14 +89,14 @@ def _parse_table(table, inc = None, df = None):
     nullable_codes = [_type_codes[_types[nullable[k]]] for k in nullable_cols]
     
     if nullable:
-        addon = '|'.join(nullable_cols).lower()
+        addon = sep.join(nullable_cols).lower()
         if len(set(nullable_codes)) == 1:
             type_addon = nullable_codes[0]
         else:
             type_addon = ''.join(nullable_codes)
         if type_addon not in ('', 'f'):
-            addon = addon  + '|' + type_addon
-        if table.endswith('|'):
+            addon = addon  + sep + type_addon
+        if table.endswith(sep):
             table = table + addon
         tp = _array_type(df.index)
         if tp != int:
@@ -99,11 +104,33 @@ def _parse_table(table, inc = None, df = None):
             nullable[index] = tp
         res['nullable'] = nullable
     
-    res['table'] = table
+    res['table'] = table[1:] if table.startswith(sep) else table
     return res
 
 
-def sql_parse_path(path, inc = None, df = None):
+
+def sql_parse_table(table = None, df = None, sep = '_'):
+    """
+    returns a table name, based on a df
+
+    >>> table = ''
+    >>> df = pd.DataFrame(dict(a = [1,2], b = [1., 2.], c = drange(1)), drange(1))
+    >>> assert sql_parse_table(table = '', df = df) == 'a_b_c_ife'
+    >>> assert sql_parse_table(table = 'does_not_change', df = df) == 'does_not_change'
+    >>> assert sql_parse_table(table = 'does_not_change_', df = None) == 'does_not_change_'
+    >>> assert sql_parse_table(table = 'gets_a_suffix_', df = df) == 'gets_a_suffix_a_b_c_ife'
+    
+    """
+    if not is_pd(df):
+        return table
+    if not table:
+        table = sep
+    if not table.endswith(sep):
+        return table
+    return _sql_parse_table(table = table, df = df , sep = sep)['table']
+    
+
+def sql_parse_path(path, inc = None):
     """
     parses a string path 
 
@@ -172,8 +199,7 @@ def sql_parse_path(path, inc = None, df = None):
     schema = _schema(schema or connections.pop('schema', None))
     doc = connections.pop('doc', 'true')
     doc = dict(true = True, false = False).get(doc.lower(), doc)        
-    table_params = _parse_table(table, inc = inc, df = df)
-    res = connections | dict(doc = doc, schema = schema, db = db, server = server, root = root, table = table, path = '%s/%s/%s/%s/%s'%(server, db, schema, table, root)) | table_params 
+    res = connections | dict(doc = doc, schema = schema, db = db, server = server, root = root, table = table, path = '%s/%s/%s/%s/%s'%(server, db, schema, table, root)) 
     return res
 
 

@@ -1,8 +1,13 @@
-from pyg_base._bitemporal import _asof 
-from pyg_sql._parse import _parse_path, _parse_root, _parse_key
+from pyg_base import is_pd, is_dict, dictable
+from pyg_base._bitemporal import _updated
+from pyg_encoders import encode, decode, cell_root, root_path, root_path_check, dictable_decode, WRITERS
+from pyg_sql._sql_table import pd_read_sql, pd_to_sql
+from pyg_sql._parse import sql_parse_path
+import pandas as pd
+from functools import partial
 
 _ts = '.ts'
-
+_pd = '.pd'
 
 
 def sql_ts_store(path):
@@ -88,14 +93,124 @@ def sql_ts_store(path):
     """
 
 
-def ts_dumps():
+def pd_dumps(obj, path, method = None):
     """
-    this is equivalent to pickle.dumps
+    converts a pandas dataframe into a table within a sql pandas store. a litle like pickle.dumps
+    
+    :Example
+    --------
+    >>> from pyg import *; import pandas as pd
+    >>> server = 'DESKTOP-GOQ0NSM'; db = 'test_db'; schema = 'dbo'
+    >>> obj = pd.Series(3., drange(10))
+    >>> method = 'replace'
+    >>> path = f'{server}/{db}/{schema}/test_table4/key3'
+
+    Parameters
+    ----------
+    obj : object
+        item to be pickled into binary.
+    path : str
+        path sqlalchemy-like to save the pickled binary in.
+
+    Returns
+    -------
+    string 
+        path
+
     """
+    args = sql_parse_path(path)
+    res = pd_to_sql(df = obj, table = args.table, db = args.db, server = args.server, schema = args.schema, index = None, columns = None, series = None, 
+                    method = method, inc = dict(key = args.root), duplicate = 'last')
+    return res
+
+
+_pd_read_sql = encode(pd_read_sql)
+_dictable_decode = encode(dictable_decode)
+
+
+def _pd_encode(value, server, db, schema, table, method = None):
     pass
 
-def ts_loads():
-    pass
+def pd_encode(value, path, method = None):
+    """
+    encodes a document or a single dataframe into a sql table
+    from pyg import * 
+    path = 'server/db/schema/table|/ticker/item'
+    """
+    args = sql_parse_path(path)
+    if is_pd(value):
+        path = root_path_check(args.path)
+        return dict(_obj = _sql_loads, path = sql_dumps(value, path))       
+    elif is_dict(value):
+        res = type(value)(**{k : sql_encode(v, '%s/%s'%(path,k)) for k, v in value.items()})
+        if isinstance(value, dictable):
+            df = pd.DataFrame(res)
+            return dict(_obj = _dictable_decode, 
+                        df =  sql_dumps(df, path if path.endswith(_dictable) else path + _dictable),
+                        loader = _sql_loads)
+        return res
+    elif isinstance(value, (list, tuple)):
+        return type(value)([sql_encode(v, '%s/%i'%(path,i)) for i, v in enumerate(value)])
+    else:
+        return value
+
+
+
+    args = sql_parse_path(path)
+    if is_pd(value):
+        path = root_path_check(args.path)
+        return pd_to_sql(df = value, table = args.table, db = args.db, server = args.server, schema = args.schema, index = None, columns = None, series = None, method = method, inc = dict(key = args.root), duplicate = 'last')
+    elif is_dict(value):
+        res = type(value)(**{k : pd_encode(v, path = '%s/%s'%(path,k), method = method) for k, v in value.items()})
+        if isinstance(value, dictable):
+            df = pd.DataFrame(res)
+            args = sql_parse_path(path, df = df)
+            return dict(_obj = _dictable_decode, 
+                        df =  pd_to_sql(df = df, table = args.table, db = args.db, server = args.server, schema = args.schema, index = None, columns = None, series = None, method = method, inc = dict(key = args.root), duplicate = 'last'), 
+                        loader = decode)
+        return res
+    elif isinstance(value, (list, tuple)):
+        return type(value)([pd_encode(v, path = '%s/%i'%(path,i), method = method) for i, v in enumerate(value)])
+    else:
+        return value
+
+
     
+def pd_write(doc, root = None, method = None):
+    """
+    writes dataframes within a document into a sql.
+    
+    :Example:
+    ---------
+    >>> from pyg import *; import pandas as pd
+    >>> server = 'DESKTOP-GOQ0NSM'; db = 'test_db'; schema = 'dbo'
+    >>> db = partial(sql_table, 
+                     table = 'tickers', 
+                     db = db, 
+                     pk = ['ticker', 'item'], 
+                     server = server, 
+                     writer = f'{server}/{db}/{schema}/tickers_data/%ticker/%item.pd', 
+                     doc = True)
+    >>> path = db().writer
+    >>> ticker = 'CLA Comdty'
+    >>> item = 'price'
+    >>> doc = db_cell(passthru, data = pd.Series([1.,2.,3.],drange(2)), ticker = ticker, item = item, db = db)
+    >>> doc = doc.go()
+    
+    >>> get_cell('tickers', 'bbgs', server = 'localhost', ticker = ticker, item = item)
+    """
+    root = cell_root(doc, root)
+    if root is None:
+        return doc
+    path = root_path(doc, root)
+    return pd_encode(doc, path, method = method)
+
+    
+
+WRITERS[_pd] = pd_write
+WRITERS[_pd + 'r'] = partial(pd_write, method = 'replace')
+WRITERS[_pd + 'i'] = partial(pd_write, method = 'insert')
+WRITERS[_pd + 'a'] = partial(pd_write, method = 'append')
+WRITERS[_pd + 'u'] = partial(pd_write, method = 'update')
 
 

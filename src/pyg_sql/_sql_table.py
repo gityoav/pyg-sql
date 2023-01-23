@@ -12,6 +12,7 @@ from pyg_base import logger, is_regex, dt
 from functools import partial
 import pandas as pd
 import numpy as np
+import re
 _CHUNK = 100
 
 _id = '_id'
@@ -21,6 +22,9 @@ _deleted = 'deleted'
 _archived = 'archived_'
 _pd_is_old = pd.__version__.startswith('0')
 _index = 'index'
+
+_is_sql_writer = re.compile('.(sq|pd)[a-z]{1}$')
+
 
 
 NVARCHAR = sa.NVARCHAR(450) 
@@ -439,12 +443,12 @@ def sql_has_table(table_name, schema, db, server, engine = None):
     return sa.inspect(e).has_table(table_name)
         
 
+
 def sql_table(table, db = None, non_null = None, nullable = None, _id = None, schema = None, 
               server = None, reader = None, writer = None, pk = None, doc = None, mode = None, 
               spec = None, selection = None, order = None, defaults = None, joint = None, create = None, engine = None):
     """
     Creates a sql table. Can also be used to simply read table from the db
-
     Parameters
     ----------
     table : str
@@ -495,13 +499,10 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         This allows connection management to be delegated to the user who may want to manage her own connection protocol
     defaults:
         this is default variable that is added to the document if it does not have its keys
-
     Returns
     -------
     res : sql_cursor
         A hybrid object we love.
-
-
     Example: simple table creation
     ---------
     >>> from pyg import * 
@@ -515,7 +516,6 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
     >>> table.inc(b = 'a').delete()
     >>> assert len(table) == 2
     >>> assert table.distinct('b') == ['b']
-
     >>> table.drop()
     
     Example: ensure sql_table defaults for a doc store if 'doc' exists in existing table or no data columns are specified on creation
@@ -525,7 +525,6 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
     table = sql_table(table = 'test', db = 'db', schema = 'dbo')
     assert tbl.doc == 'doc'
     table.drop()
-
     Example: simple join
         
     """
@@ -562,8 +561,6 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         doc = table.doc if doc is None else doc
         pk = table.pk if pk is None else pk
         table = table.name
-    else:
-        raise ValueError(f'not sure what table is: {table}')
     
     ### we resolve some parameters
     if doc is True: #user wants a doc
@@ -614,10 +611,14 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
 
     col_names = [col.name for col in cols]
     pk_cols   = [Column(k, _pk_types.get(t, t), nullable = False, autoincrement = False) for k, t in pks.items() if k not in col_names]
-    non_nulls = [Column(k, _types.get(t, t), nullable = False, autoincrement = False) for k, t in non_null.items() if k not in col_names]
-    nullables = [Column(k.lower(), _types.get(t, t), nullable = True, autoincrement = False) for k, t in nullable.items() if k not in col_names] 
-    docs = [Column(doc, String, nullable = True, autoincrement = False)] if doc else []
+    non_nulls = [Column(k, _types.get(t, t), nullable = False, autoincrement = False) for k, t in non_null.items() if k not in col_names and k not in pks]    
+    nullables = [Column(k.lower(), _types.get(t, t), nullable = True, autoincrement = False) for k, t in nullable.items() if k not in col_names and k not in pks and k not in non_null]
+    if not doc or doc in col_names or doc in pks or doc in non_null or doc in nullable:
+        docs = []
+    else:        
+        docs = [Column(doc, String, nullable = True, autoincrement = False)]
     cols = cols + pk_cols + non_nulls + nullables + docs
+
 
     ## creation logic:
     if create is None:
@@ -626,13 +627,11 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
     ## time to access/create tables        
     e = _get_engine(server = server, db = db, schema = schema, create = create, engine = engine)
     schema = create_schema(e, _schema(schema), create = create)
-    if sa.inspect(e).has_table(table):    
-    #try:
+    try:
         tbl = _get_table(table_name = table_name, schema = schema, db = db, server = server, create = create, engine = e) ## by default we grab the existing table
         if doc is None and _doc in [col.name for col in tbl.columns]:
             doc = _doc
-    else:
-    #except sa.exc.NoSuchTableError:        
+    except sa.exc.NoSuchTableError:        
         if doc is None and len(non_null) == 0 and len(nullable) == 0: #user specified nothing but pk so assume table should contain SOMETHING :-)
             doc = _doc
         meta = MetaData()
@@ -644,7 +643,7 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
             meta.create_all(e)
             idx_keys = [tbl.c[key] for key in pks]
             if pks:
-                idx = sa.Index('_'.join(sorted(pks)), *idx_keys, unique=True)
+                idx = sa.Index("idx_pks", *idx_keys, unique=True)
                 idx.create(e)
         else:
             raise ValueError(f'table {table_name} does not exist. You need to explicitly set create=True or create="t/s/d" to mandate table creation')
@@ -653,6 +652,7 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
                      pk = list(pk) if isinstance(pk, dict) else pk, doc = doc,
                      spec = spec, selection = selection, order = order, joint = joint)
     return res
+
 
 class sql_cursor(object):
     """
@@ -1613,19 +1613,18 @@ class sql_cursor(object):
             edoc[self.doc] = type(doc)({k : v for k, v in doc.items() if k not in drop})
             return edoc
 
-    def _writer(self, writer = None, doc = None, kwargs = None, df = None):
+    def _writer(self, writer = None, doc = None, kwargs = None):
         doc = doc or {}
         if writer is None:
             writer = doc.get(_root)
         if writer is None:
             writer = self.writer
-        return as_writer(writer, kwargs = kwargs, df = df)
+        return as_writer(writer, kwargs = kwargs)
             
     def _write_doc(self, doc, writer = None, columns = None):
         columns = columns or self.columns
         writer = self._writer(writer, doc = doc, kwargs = doc)
-        res = type(doc)({key: self._write_item(value, writer = writer, kwargs = doc) for key, value in doc.items() if key in columns})
-        #res = self._dock(res, columns = columns) if dock else res
+        res = type(doc)({key: self._write_item(value, writer = writer) for key, value in doc.items() if key in columns})
         return res
 
     def _write_item(self, item, writer = None, kwargs = None):
@@ -2185,11 +2184,13 @@ class sql_cursor(object):
             schema = _archived + (self.schema or '')
             # logger.info('archived schema: %s'%schema)
             writer = self.writer
-            if is_str(writer) and writer.endswith('.sql'):
+            if is_str(writer) and _is_sql_writer.search(writer) is not None:
+                suffix = _is_sql_writer.search(writer).group(0)
                 params = writer.split('/')
                 params[2] = schema
                 writer = '/'.join(params)
-                writer = writer.replace('.sql','/%deleted.sql')
+                writer = writer.replace(suffix,'/%deleted' + suffix)
+                
             res = sql_table(table = self.table, 
                             db = self.db, 
                             non_null = dict(deleted = datetime.datetime), 
@@ -2203,6 +2204,7 @@ class sql_cursor(object):
             res.order = self.order
             res.selection = self.selection
             return res
+
                 
     @property
     def address(self):

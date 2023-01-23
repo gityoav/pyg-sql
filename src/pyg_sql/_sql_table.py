@@ -1771,7 +1771,7 @@ class sql_cursor(object):
             data, columns = self.execute(statement.limit(value+1), transform = _data_and_columns)
             row = data[value]
         else:
-            data, columns = self.execute(statement.limit(value+1), transform = _data_and_columns)
+            data, columns = self.execute(statement.offset(value).limit(value+1), transform = _data_and_columns)
             row = data[0]
         doc = self._rows_to_docs(data = row, reader = reader, columns = columns)
         rtn = self._undock(doc)

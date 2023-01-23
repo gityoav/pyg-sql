@@ -1,17 +1,18 @@
 # pyg-sql
 
-## Intriduction
+## Introduction
 
-* conda install from https://anaconda.org/yoavgit/pyg-sql 
 * pip install from https://pypi.org/project/pyg-sql/
+* conda install: I no longer maintain a conda environment so an old version is available here: https://anaconda.org/yoavgit/pyg-sql. The project itself will happily conda-build.
 
 pyg-sql creates sql_cursor (and its constructor, sql_table), a thin wrapper on sql-alchemy (sa.Table), providing three different functionailities:
 
-* simplified create/filter/sort/access of a sql table
-* maintainance of a table where records are unique per specified primary keys while we auto-archive old data
+* simplified create/filter/sort/access/join of a sql table
 * creation of a full no-sql like document-store
+* full "in-the-background" maintainance of indexed unique records are per specified primary keys while we auto-archive old data
+* supports both a transactional and an ad-hoc approach
 
-pyg-sql "abandons" the relational part of SQL: we make using a *single* table extremely easy while forgo any multiple-tables-relations completely.
+pyg-sql supports very light joins but makes playing with a single table MUCH easier than traditional sqlalchemy.
 
 ## access simplification
 
@@ -32,7 +33,7 @@ This allows us to
     >>> from pyg_sql import * 
     >>> import datetime
     
-    >>> t = sql_table(db = 'test', table = 'students', non_null = ['name', 'surname'], 
+    >>> t = sql_table(db = 'test_db', table = 'students', non_null = ['name', 'surname'], server = 'DESKTOP-LU5C5QF',
                           _id = dict(_id = int, created = datetime.datetime), 
                           nullable =  dict(doc = str, details = str, dob = datetime.date, age = int, grade = float))
     >>> t = t.delete()
@@ -53,12 +54,16 @@ This allows us to
     >>> assert t.sort(dict(age=-1))[0].name == 'yoav'                                                # sort in descending order
     >>> assert t.sort('name')[::].name == ['anna', 'ayala', 'itamar', 'opher', 'yoav']
     >>> assert t.sort('name')[['name', 'surname']][::].shape == (5, 2)                              ## access of specific column(s)
-    >>> assert t.distinct('surname') == ['gate', 'git']
+    >>> assert t.surname == ['gate', 'git']
     >>> assert t['surname'] == ['gate', 'git']
     >>> assert t[dict(name = 'yoav')] == t.inc(name = 'yoav')[0]
 
     >>> names = [doc.name for doc in t.sort(dict(age=-1))]
     >>> assert names == ['yoav', 'anna', 'ayala', 'opher', 'itamar']
+
+    :Example: DataFrame access:
+    >>> t.df()
+    >>> t.
     
     :Example: simple filtering
     --------------------------

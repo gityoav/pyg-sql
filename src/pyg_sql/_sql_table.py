@@ -228,6 +228,7 @@ class sql_df():
         if start and cursor.order is not None:
             statement = statement.offset(start)
             stop = stop if stop is None else stop - start
+            start = None
         if stop is not None:
             statement = statement.limit(1+stop)
         if _pd_is_old:
@@ -1695,6 +1696,7 @@ class sql_cursor(object):
         if start and self.order is not None:
             statement = statement.offset(start)
             stop = stop if stop is None else stop - start
+            start = None
         if stop is not None:
             statement = statement.limit(1+stop)
         data, columns = self.execute(statement, transform = _data_and_columns)
@@ -1770,7 +1772,7 @@ class sql_cursor(object):
         if self.order is None:
             data, columns = self.execute(statement.limit(value+1), transform = _data_and_columns)
             row = data[value]
-        else:
+        else: ## can pull precisely one row given ordering
             data, columns = self.execute(statement.offset(value).limit(value+1), transform = _data_and_columns)
             row = data[0]
         doc = self._rows_to_docs(data = row, reader = reader, columns = columns)

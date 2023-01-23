@@ -49,6 +49,32 @@ This allows us to
 
     :Example: simple access
     -----------------------
+    You can access rows either as dicts or as pd.Series
+    
+    >>> t[0]
+    
+    {'_id': 1,
+     'created': datetime.datetime(2023, 1, 23, 17, 0, 6, 553000),
+     'name': 'yoav',
+     'surname': 'git',
+     'doc': None,
+     'details': None,
+     'dob': None,
+     'age': 48,
+     'grade': None}
+
+    >>> t.df[0]
+    _id                                 1
+    created    2023-01-23 17:00:06.553000
+    name                             yoav
+    surname                           git
+    doc                              None
+    details                          None
+    dob                              None
+    age                                48
+    grade                            None
+    dtype: object
+    
     >>> assert t.sort('age')[0].name == 'itamar'                                                     # youngest
     >>> assert t.sort('age')[-1].name == 'yoav'                                                      # access of last record
     >>> assert t.sort(dict(age=-1))[0].name == 'yoav'                                                # sort in descending order
@@ -62,9 +88,14 @@ This allows us to
     >>> assert names == ['yoav', 'anna', 'ayala', 'opher', 'itamar']
 
     :Example: DataFrame access:
-    >>> t.df()
-    >>> t.
-    
+    ---------------------------
+    >>> t.df() ## get all the data as a dataframe
+    >>> t.sort('age')[['age', 'name']].df[2:4]
+
+       age   name
+    0   17  ayala
+    1   37   anna    
+
     :Example: simple filtering
     --------------------------
     >>> assert len(t.inc(surname = 'gate')) == 3

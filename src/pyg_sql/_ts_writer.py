@@ -2,7 +2,7 @@ from pyg_base import is_pd, is_dict, dictable
 from pyg_base._bitemporal import _updated
 from pyg_encoders import encode, decode, cell_root, root_path, root_path_check, dictable_decode, WRITERS
 from pyg_sql._sql_table import pd_read_sql, pd_to_sql
-from pyg_sql._parse import sql_parse_path
+from pyg_sql._parse import sql_parse_path, sql_parse_table, _key
 import pandas as pd
 from functools import partial
 
@@ -128,51 +128,39 @@ _pd_read_sql = encode(pd_read_sql)
 _dictable_decode = encode(dictable_decode)
 
 
-def _pd_encode(value, server, db, schema, table, method = None):
-    pass
+def _pd_encode(value, server, db, schema, table, root, path, method = None, sep = '_', **kwargs):
+    if is_pd(value):
+        tbl = sql_parse_table(table = table, df = value, sep = sep)
+        return pd_to_sql(df = value, table = tbl, schema = schema, server = server, db = db, method = method, inc = {_key : root})
+    elif is_dict(value):
+        res = type(value)(**{k : _pd_encode(v, server = server, db = db, schema = schema, table = table, 
+                                            root = '%s/%s'%(root,k), 
+                                            path = '%s/%s'%(path,k), 
+                                            method = method, sep = sep) for k, v in value.items()})
+        if isinstance(value, dictable):
+            df = pd.DataFrame(res)
+            tbl = sql_parse_table(table = table if table.endswith(sep) else table + sep, df = df, sep = sep)
+            return dict(_obj = _dictable_decode, 
+                        df = pd_to_sql(df = value, table = tbl, schema = schema, server = server, db = db, method = method, inc = {_key : root}))
+        return res
+    elif isinstance(value, (list, tuple)):
+        return type(value)([_pd_encode(v, server = server, db = db, schema = schema, table = table, 
+                                            root = '%s/%s'%(root,k), 
+                                            path = '%s/%s'%(path,k), 
+                                            method = method, sep = sep) for k, v in enumerate(value)])
+    else:
+        return value
+    
 
-def pd_encode(value, path, method = None):
+def pd_encode(value, path, method = None, sep = '_'):
     """
     encodes a document or a single dataframe into a sql table
     from pyg import * 
     path = 'server/db/schema/table|/ticker/item'
+    
     """
     args = sql_parse_path(path)
-    if is_pd(value):
-        path = root_path_check(args.path)
-        return dict(_obj = _sql_loads, path = sql_dumps(value, path))       
-    elif is_dict(value):
-        res = type(value)(**{k : sql_encode(v, '%s/%s'%(path,k)) for k, v in value.items()})
-        if isinstance(value, dictable):
-            df = pd.DataFrame(res)
-            return dict(_obj = _dictable_decode, 
-                        df =  sql_dumps(df, path if path.endswith(_dictable) else path + _dictable),
-                        loader = _sql_loads)
-        return res
-    elif isinstance(value, (list, tuple)):
-        return type(value)([sql_encode(v, '%s/%i'%(path,i)) for i, v in enumerate(value)])
-    else:
-        return value
-
-
-
-    args = sql_parse_path(path)
-    if is_pd(value):
-        path = root_path_check(args.path)
-        return pd_to_sql(df = value, table = args.table, db = args.db, server = args.server, schema = args.schema, index = None, columns = None, series = None, method = method, inc = dict(key = args.root), duplicate = 'last')
-    elif is_dict(value):
-        res = type(value)(**{k : pd_encode(v, path = '%s/%s'%(path,k), method = method) for k, v in value.items()})
-        if isinstance(value, dictable):
-            df = pd.DataFrame(res)
-            args = sql_parse_path(path, df = df)
-            return dict(_obj = _dictable_decode, 
-                        df =  pd_to_sql(df = df, table = args.table, db = args.db, server = args.server, schema = args.schema, index = None, columns = None, series = None, method = method, inc = dict(key = args.root), duplicate = 'last'), 
-                        loader = decode)
-        return res
-    elif isinstance(value, (list, tuple)):
-        return type(value)([pd_encode(v, path = '%s/%i'%(path,i), method = method) for i, v in enumerate(value)])
-    else:
-        return value
+    return _pd_encode(value = value, method = method, sep = sep, **args)
 
 
     

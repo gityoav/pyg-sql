@@ -1668,7 +1668,7 @@ class sql_cursor(object):
         """
         reader = self._reader(reader)
         res = row
-        if isinstance(res, sa.engine.row.LegacyRow):
+        if isinstance(res, (sa.engine.row.LegacyRow, sa.engine.row.Row)):
             res = tuple(res)
         if isinstance(res, (list, tuple)):
             res = type(res)([self._read_item(item, reader = reader, load = load) for item in res])

@@ -655,8 +655,6 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
     return res
 
 
-SESSIONS = dict()
-
 class sql_cursor(object):
     """
     # pyg-sql
@@ -1048,21 +1046,11 @@ class sql_cursor(object):
             * context management (i.e. implement __enter__ and __exit__)            
             
         """
-        if valid_session(self.session):
-            self.session.dry_run = dry_run
-            return self
-        address = self.address
-        if session_maker is None: ## we will manage jointly with all the other sessions
-            if address in SESSIONS:
-                self.session = SESSIONS[address]
-            else:
-                self.session = Session(self.engine)
-            self.session.dry_run = dry_run
-            SESSIONS[address] = self.session            
-            return self
-        else:
+        if session_maker is None:
+            session_maker = Session
+        if not valid_session(self.session):
             self.session = session_maker(self.engine)
-            self.session.dry_run = dry_run
+        self.session.dry_run = dry_run
         return self
 
     def create_index(self, *columns, name = None, unique = False):
@@ -1137,11 +1125,16 @@ class sql_cursor(object):
             cursor.execute(another_statement)
             
 
-        """
-        self = self.connect()
-        res = self.session.execute(statement, *args, **kwargs)
-        if transform:
-            res = transform(res)
+        """        
+        if valid_session(self.session): ## we are within context
+            res = self.session.execute(statement, *args, **kwargs)
+            if transform:
+                res = transform(res)
+        else:
+            with self.engine.connect() as connection:
+                res = connection.execute(statement, *args, **kwargs)
+                if transform:
+                    res = transform(res)
         return res
     
     def commit(self):

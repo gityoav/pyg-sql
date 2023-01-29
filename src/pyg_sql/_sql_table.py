@@ -1137,16 +1137,11 @@ class sql_cursor(object):
             cursor.execute(another_statement)
             
 
-        """        
-        if valid_session(self.session): ## we are within context
-            res = self.session.execute(statement, *args, **kwargs)
-            if transform:
-                res = transform(res)
-        else:
-            with self.engine.connect() as connection:
-                res = connection.execute(statement, *args, **kwargs)
-                if transform:
-                    res = transform(res)
+        """
+        self = self.connect()
+        res = self.session.execute(statement, *args, **kwargs)
+        if transform:
+            res = transform(res)
         return res
     
     def commit(self):

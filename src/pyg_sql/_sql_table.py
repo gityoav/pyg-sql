@@ -13,6 +13,8 @@ from functools import partial
 import pandas as pd
 import numpy as np
 import re
+import pyodbc
+
 _CHUNK = 100
 
 _id = '_id'
@@ -1135,8 +1137,18 @@ class sql_cursor(object):
             cursor.execute(another_statement)
             
 
-        """        
-        res = self.connect().session.execute(statement, *args, **kwargs)
+        """
+        try:
+            res = self.connect().session.execute(statement, *args, **kwargs)
+        except (pyodbc.OperationalError, sa.exc.PendingRollbackError, sa.exc.DisconnectionError, sa.exc.InvalidatePoolError) as e: ## if session has expired, we reconnect
+            address = self.address
+            if address in SESSIONS:
+                dry_run = self.session.dry_run
+                SESSIONS[address] = None
+                self.session = None
+                res = self.connect(dry_run = dry_run).session.execute(statement, *args, **kwargs)                
+            else:
+                raise e                
         if transform:
             res = transform(res)
         return res

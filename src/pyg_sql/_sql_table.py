@@ -1143,7 +1143,7 @@ class sql_cursor(object):
         except (pyodbc.OperationalError, sa.exc.PendingRollbackError, sa.exc.DisconnectionError, sa.exc.InvalidatePoolError) as e: ## if session has expired, we reconnect
             address = self.address
             if address in SESSIONS:
-                dry_run = self.session.dry_run
+                dry_run = None if self.session is None else self.session.dry_run
                 SESSIONS[address] = None
                 self.session = None
                 res = self.connect(dry_run = dry_run).session.execute(statement, *args, **kwargs)                

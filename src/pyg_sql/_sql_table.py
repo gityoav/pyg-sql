@@ -1054,7 +1054,9 @@ class sql_cursor(object):
             return self
         if session_maker is None: ## we will manage jointly with all the other sessions
             address = self.address
-            session = SESSIONS.get(address) or Session(self.engine)
+            session = SESSIONS.get(address) 
+            if session is None:
+                session = Session(self.engine)
             session.dry_run = dry_run
             SESSIONS[address] = session
             self.session = session

@@ -1067,11 +1067,10 @@ class sql_cursor(object):
             session.dry_run = dry_run
             SESSIONS[address] = session
             self.session = session
-            return self
         else:
             self.session = session_maker(self.engine)
             self.session.dry_run = dry_run
-        return 
+        return self
     
     def create_index(self, *columns, name = None, unique = False):
         """

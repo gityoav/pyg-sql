@@ -1084,7 +1084,8 @@ class sql_cursor(object):
         if valid_session(self.session):
             self.session.dry_run = dry_run
             return self
-        if session_maker is None: ## we will manage jointly with all the other sessions
+        ## we will manage jointly with all the other sessions but only if dry_run is not None
+        if session_maker is None and dry_run is not None: 
             address = self.address
             session = SESSIONS.get(address) 
             if session is None:
@@ -1094,6 +1095,7 @@ class sql_cursor(object):
             self.session = session
             return self
         else:
+            session_maker = session_maker or Session
             self.session = session_maker(self.engine)
             self.session.dry_run = dry_run
         return 

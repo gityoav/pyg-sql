@@ -656,7 +656,39 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
                      spec = spec, selection = selection, order = order, joint = joint)
     return res
 
-SESSIONS = dict()
+
+class commit_dict(dict):
+    def __delitem__(self, key):
+        if key in self:
+            session = self.get(key)
+            if valid_session(session):
+                dry_run = session.dry_run
+                if dry_run:
+                    try:
+                        session.rollback()
+                        logger.info('rolled back session for %s'%key)
+                    except Exception:
+                        logger.info('failed to rollback session for %s'%key)                    
+                else:
+                    try:
+                        session.commit()
+                        logger.info('committed session for %s'%key)
+                    except Exception:
+                        logger.info('failed to commit session for %s'%key)                    
+            return super(commit_dict, self).__delitem__(key)
+
+    def __setitem__(self, key, value):
+        del self[key]
+        return super(commit_dict, self).__setitem__(key, value)
+    
+    def __del__(self):
+        for key in self:
+            del self[key]
+        return super(commit_dict, self).__del__()
+        
+
+SESSIONS = commit_dict()
+
 
 class sql_cursor(object):
     """
@@ -1201,6 +1233,11 @@ class sql_cursor(object):
             self.session.__exit__(type, value, traceback)
             self.session= None
         return self
+    
+    
+    def __del__(self):
+        self.commit()
+
 
     @property
     def _ids(self):

@@ -1065,6 +1065,7 @@ class sql_cursor(object):
             self.session = session_maker(self.engine)
             self.session.dry_run = dry_run
         return 
+    
     def create_index(self, *columns, name = None, unique = False):
         """
         Creates an index on the table. If an existing index exists matching the same definitions, will raise rather than create the same.
@@ -1140,7 +1141,8 @@ class sql_cursor(object):
         """
         try:
             res = self.connect().session.execute(statement, *args, **kwargs)
-        except (pyodbc.OperationalError, sa.exc.PendingRollbackError, sa.exc.DisconnectionError, sa.exc.InvalidatePoolError) as e: ## if session has expired, we reconnect
+        except (sa.exc.PendingRollbackError, sa.exc.DisconnectionError, sa.exc.InvalidatePoolError) as e: ## if session has expired, we reconnect
+        #except (pyodbc.OperationalError, sa.exc.PendingRollbackError, sa.exc.DisconnectionError, sa.exc.InvalidatePoolError) as e: ## if session has expired, we reconnect
             address = self.address
             if address in SESSIONS:
                 dry_run = None if self.session is None else self.session.dry_run

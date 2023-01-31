@@ -655,39 +655,9 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
                      pk = list(pk) if isinstance(pk, dict) else pk, doc = doc,
                      spec = spec, selection = selection, order = order, joint = joint)
     return res
-
-
-class commit_dict(dict):
-    def __delitem__(self, key):
-        if key in self:
-            session = self.get(key)
-            if valid_session(session):
-                dry_run = session.dry_run
-                if dry_run:
-                    try:
-                        session.rollback()
-                        logger.info('rolled back session for %s'%key)
-                    except Exception:
-                        logger.info('failed to rollback session for %s'%key)                    
-                else:
-                    try:
-                        session.commit()
-                        logger.info('committed session for %s'%key)
-                    except Exception:
-                        logger.info('failed to commit session for %s'%key)                    
-            return super(commit_dict, self).__delitem__(key)
-
-    def __setitem__(self, key, value):
-        del self[key]
-        return super(commit_dict, self).__setitem__(key, value)
-    
-    def __del__(self):
-        for key in self:
-            del self[key]
-        return super(commit_dict, self).__del__()
         
 
-SESSIONS = commit_dict()
+SESSIONS = dict()
 
 
 class sql_cursor(object):
@@ -1082,20 +1052,23 @@ class sql_cursor(object):
             
         """
         if valid_session(self.session):
-            self.session.dry_run = dry_run
+            if dry_run is not None:
+                self.session.dry_run = dry_run
+                address = self.address
+                SESSIONS[address] = self.session                
             return self
         ## we will manage jointly with all the other sessions but only if dry_run is not None
-        if session_maker is None and dry_run is not None: 
+        session_maker = session_maker or Session
+        if dry_run is not None: ## we want to be within a transaction so we cache the connection 
             address = self.address
             session = SESSIONS.get(address) 
             if session is None:
-                session = Session(self.engine)
+                session = session_maker(self.engine)
             session.dry_run = dry_run
             SESSIONS[address] = session
             self.session = session
             return self
         else:
-            session_maker = session_maker or Session
             self.session = session_maker(self.engine)
             self.session.dry_run = dry_run
         return 

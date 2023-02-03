@@ -31,30 +31,49 @@ _is_sql_writer = re.compile('.(sq|pd)[a-z]{1}$')
 
 NVARCHAR = sa.NVARCHAR(450) 
 VARCHAR = sa.VARCHAR(450)
+
 _types = {str: String, 'str' : String, 's': String,
           int : Integer, 'int' : Integer, 'i' : Integer,
           float: Float, 'float': Float, 'f': Float,
           bool : Boolean, 'bool' : Boolean, 'b' : Boolean,
           np.int64 : sa.BigInteger, 'bigint' : sa.BigInteger, 'g' : sa.BigInteger,
-          'nvarchar' : NVARCHAR, 'n' : NVARCHAR,
-          'varchar' : VARCHAR, 'v' : VARCHAR,
-          'dec' : DECIMAL(0),  'dec1' : DECIMAL(1), 'dec2' : DECIMAL(2), 'dec3' : DECIMAL(3), 'dec4' : DECIMAL(4), 
-                                  'dec5' : DECIMAL(5), 'dec6' : DECIMAL(6), 'dec7' : DECIMAL(7), 'dec8' : DECIMAL(8), 
-          '0' : DECIMAL(0),  '1' : DECIMAL(1), '2' : DECIMAL(2), '3' : DECIMAL(3), '4' : DECIMAL(4), 
-                                  '5' : DECIMAL(5), '6' : DECIMAL(6), '7' : DECIMAL(7), '8' : DECIMAL(8), 
+          'nvarchar' : sa.NVARCHAR, 'n' : sa.NVARCHAR,
+          'varchar' : sa.VARCHAR, 'v' : sa.VARCHAR,
+          'decimal' : DECIMAL,
+          'dec' : DECIMAL,
+          '0' : DECIMAL(0),  '1' : DECIMAL(1), '2' : DECIMAL(2), '3' : DECIMAL(3), '4' : DECIMAL(4),
+          '5' : DECIMAL(5), '6' : DECIMAL(6), '7' : DECIMAL(7), '8' : DECIMAL(8), '9' : DECIMAL(9),
           datetime.date: DATE, 'date' : DATE, 'd' : DATETIME,
           datetime.datetime : DATETIME, 'datetime' : DATETIME, 'dt' : DATETIME, dt : DATETIME, 'e' : DATETIME,
           datetime.time: TIME, 'time' : TIME, 't' : TIME,
           bin : sa.VARBINARY, 'y': sa.VARBINARY}
 
-_type_codes = {String : 's', Integer : 'i', Float : 'f', Boolean: 'b', sa.BigInteger : 'g', 
-               NVARCHAR : 'n', NVARCHAR : 'v', DATE : 'd', TIME: 't', DATETIME : 'e', sa.VARBINARY: 'y',
-               DECIMAL(0): '0', DECIMAL(1): '1', DECIMAL(2): '2', DECIMAL(3): '3', DECIMAL(4): '4', 
-               DECIMAL(5): '5', DECIMAL(6): '6', DECIMAL(7): '7', DECIMAL(8): '8'}
+_type_codes = {String : 's', Integer : 'i', Float : 'f', Boolean: 'b', sa.BigInteger : 'g',
+               NVARCHAR : 'n', VARCHAR : 'v', DATE : 'd', TIME: 't', DATETIME : 'e', sa.VARBINARY: 'y',
+               DECIMAL(0): '0', DECIMAL(1): '1', DECIMAL(2): '2', DECIMAL(3): '3', DECIMAL(4): '4',
+               DECIMAL(5): '5', DECIMAL(6): '6', DECIMAL(7): '7', DECIMAL(8): '8', DECIMAL(9): '9'}
 
 
 ## This is what is used for keys that are strings and are part of the primary keys to ensure they can be indexed
 _pk_types = _types | {str : NVARCHAR, 'str' : NVARCHAR} 
+
+
+def _as_type(t, types):
+    if isinstance(t, str):
+        t = t.lower()
+        strs = {k:v for k,v in types.items() if isinstance(k, str) and t.startswith(k)}
+        if len(strs) == 0:
+            raise ValueError(f'type {t} not found')
+        else:
+            k, v = sorted(list(strs.items()))[-1]
+            if k == t:
+                return NVARCHAR if v == sa.NVARCHAR else VARCHAR if v == sa.VARCHAR else v
+            else:
+                n = int(t[len(k):])
+                return v(n)
+    else:
+        return types.get(t, t)
+
 
 _orders = {1 : asc, True: asc, 'asc': asc, asc : asc, -1: desc, False: desc, 'desc': desc, desc: desc}
 
@@ -613,9 +632,9 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
                     raise ValueError('not sure how to create an automatic item with column %s'%t)
 
     col_names = [col.name for col in cols]
-    pk_cols   = [Column(k, _pk_types.get(t, t), nullable = False, autoincrement = False) for k, t in pks.items() if k not in col_names]
-    non_nulls = [Column(k, _types.get(t, t), nullable = False, autoincrement = False) for k, t in non_null.items() if k not in col_names and k not in pks]    
-    nullables = [Column(k.lower(), _types.get(t, t), nullable = True, autoincrement = False) for k, t in nullable.items() if k not in col_names and k not in pks and k not in non_null]
+    pk_cols   = [Column(k, _as_type(t, _pk_types), nullable = False, autoincrement = False) for k, t in pks.items() if k not in col_names]
+    non_nulls = [Column(k, _as_type(t, _types), nullable = False, autoincrement = False) for k, t in non_null.items() if k not in col_names and k not in pks]    
+    nullables = [Column(k.lower(), _as_type(t, _types), nullable = True, autoincrement = False) for k, t in nullable.items() if k not in col_names and k not in pks and k not in non_null]
     if not doc or doc in col_names or doc in pks or doc in non_null or doc in nullable:
         docs = []
     else:        

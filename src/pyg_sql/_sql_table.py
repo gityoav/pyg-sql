@@ -343,7 +343,6 @@ def get_driver(driver = None):
     if driver is None or driver is True:
         driver = cfg_read().get('sql_driver')
     if driver is None:
-        import pyodbc
         odbc_drivers = [d for d in pyodbc.drivers() if d.startswith('ODBC')]
         if len(odbc_drivers):
             driver = sorted(odbc_drivers)[-1]

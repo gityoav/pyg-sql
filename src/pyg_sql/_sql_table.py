@@ -467,7 +467,7 @@ def sql_has_table(table_name, schema, db, server, engine = None):
 
 def sql_table(table, db = None, non_null = None, nullable = None, _id = None, schema = None, 
               server = None, reader = None, writer = None, pk = None, doc = None, mode = None, 
-              spec = None, selection = None, order = None, defaults = None, joint = None, create = None, engine = None):
+              spec = None, selection = None, order = None, defaults = None, joint = None, create = None, engine = None, session = None, dry_run = None):
     """
     Creates a sql table. Can also be used to simply read table from the db
     Parameters
@@ -671,7 +671,7 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
     res = sql_cursor(table = tbl, schema = schema, db = db, server = server, engine = e, 
                      reader = reader, writer = writer, defaults = defaults,
                      pk = list(pk) if isinstance(pk, dict) else pk, doc = doc,
-                     spec = spec, selection = selection, order = order, joint = joint)
+                     spec = spec, selection = selection, order = order, joint = joint, session = session, dry_run = dry_run)
     return res
         
 
@@ -981,8 +981,11 @@ class sql_cursor(object):
     >>> assert list(read_from_db.salary.values) == [100, 200, 300]
     >>> assert list(read_from_file.values) == [100, 200, 300]
     """
-    def __init__(self, table, schema = None, db = None, engine = None, server = None, session = None,
-                 spec = None, selection = None, order = None, joint = None, reader = None, writer = None, 
+    
+    session_maker = Session
+    
+    def __init__(self, table, schema = None, db = None, engine = None, server = None, session = None, dry_run = None,
+                 spec = None, selection = None, order = None, joint = None, reader = None, writer = None,
                  pk = None, defaults = None, doc = None, **_):
         """
         Parameters
@@ -999,6 +1002,8 @@ class sql_cursor(object):
             The server for the engine. If none, uses the default in pyg config file
         session: db session, optional
             An uncommitted session
+        dry_run: bool
+            status of the uncommitted transaction. if True, will roll-back at commit time.
         spec : sa.Expression, optional
             The "where" statement
         selection : str/list of str, optional
@@ -1028,6 +1033,7 @@ class sql_cursor(object):
             joint = table.joint if joint is None else joint
             reader = table.reader if reader is None else reader
             writer = table.writer if writer is None else writer
+            dry_run = table.dry_run if dry_run is None else dry_run
             pk = table.pk if pk is None else pk
             doc = table.doc if doc is None else doc
             defaults = table.defaults if defaults is None else defaults
@@ -1048,11 +1054,12 @@ class sql_cursor(object):
         self.pk = pk
         self.defaults = defaults
         self.doc = doc
+        self.dry_run = dry_run ## indicating we are within a transaction, please keep the same session
     
     def copy(self):
         return type(self)(self)
 
-    def connect(self, dry_run = None, session_maker = None):
+    def connect(self, dry_run = None):
         """
         Creates a valid session and attach it to the cursor
         
@@ -1060,34 +1067,25 @@ class sql_cursor(object):
         -----------
         dry_run: bool
             if set to True, when exiting the context, will rollback rather than commit
-        
-        session_maker: callable
-            a function that takes an engine and return a session-like object.
-            This allows user to implement their own logging etc. 
-            The resulting session must support 
-            * commit, rollback and execute
-            * context management (i.e. implement __enter__ and __exit__)            
-            
+                    
         """
         if valid_session(self.session):
             if dry_run is not None:
-                self.session.dry_run = dry_run
+                self.dry_run = None if dry_run == 'none' else dry_run
                 address = self.address
                 SESSIONS[address] = self.session                
             return self
         ## we will manage jointly with all the other sessions but only if dry_run is not None
-        session_maker = session_maker or Session
+        dry_run = self.dry_run
         if dry_run is not None: ## we want to be within a transaction so we cache the connection 
             address = self.address
             session = SESSIONS.get(address) 
             if session is None:
-                session = session_maker(self.engine)
-            session.dry_run = dry_run
+                session = self.session_maker(self.engine)
             SESSIONS[address] = session
             self.session = session
         else:
-            self.session = session_maker(self.engine)
-            self.session.dry_run = dry_run
+            self.session = self.session_maker(self.engine)
         return self
     
     def create_index(self, *columns, name = None, unique = False):
@@ -1169,10 +1167,9 @@ class sql_cursor(object):
         #except (pyodbc.OperationalError, sa.exc.PendingRollbackError, sa.exc.DisconnectionError, sa.exc.InvalidatePoolError) as e: ## if session has expired, we reconnect
             address = self.address
             if address in SESSIONS:
-                dry_run = None if self.session is None else self.session.dry_run
                 SESSIONS[address] = None
                 self.session = None
-                res = self.connect(dry_run = dry_run).session.execute(statement, *args, **kwargs)                
+                res = self.connect().session.execute(statement, *args, **kwargs)                
             else:
                 raise e                
         if transform:
@@ -1181,7 +1178,7 @@ class sql_cursor(object):
     
     def commit(self):
         if valid_session(self.session):
-            if self.session.dry_run:
+            if self.dry_run:
                 self.session.rollback()
             else:
                 self.session.commit()
@@ -1205,7 +1202,6 @@ class sql_cursor(object):
         """
         if not valid_session(self.session):
             self.session = Session(self.engine)
-            self.session.dry_run = None
         self.session.__enter__()
         return self
 
@@ -1223,7 +1219,6 @@ class sql_cursor(object):
         self.commit()
         if valid_session(self.session):
             self.session.__exit__(type, value, traceback)
-            self.session= None
         return self
     
     
@@ -2191,8 +2186,7 @@ class sql_cursor(object):
         if is_strs(keys):
             keys = self._col(keys)
             keys = [self.table.columns[k] for k in keys]
-        session = Session(self.engine)
-        query = session.query(*keys)
+        query = self.connect().session.query(*keys)
         if self.spec is not None:
             query = query.where(self.spec)        
         res = query.distinct().all()

@@ -2227,8 +2227,8 @@ class sql_cursor(object):
 
     @property
     def deleted(self):
-        if self._is_deleted() or len(self._pk) == 0:
-            return self
+        if self._is_deleted():
+            return self.distinct('deleted')
         else:
             schema = _archived + (self.schema or '')
             # logger.info('archived schema: %s'%schema)

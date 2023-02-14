@@ -1,4 +1,5 @@
 from pyg_sql import sql_table, sql_cursor, get_engine, create_schema
+from pyg import * 
 import sqlalchemy as sa
 import pytest
 from functools import partial
@@ -99,15 +100,23 @@ def test_writable_doc_store_save_and_read():
 
 
 def test_archive_does_not_update():
-    from pyg import *
     table = sql_table(db = 'test_db', schema = 'dbo', table = 'data', pk = 'item', doc = True,
                       writer = '/test_db/dbo/datas/%item.sql'
                       )
-    
+    table.delete()
     table.update_one(db_cell(item = 'a', ts = pd.Series([1,2,3], [4,5,6]), b = 1))
     table.update_one(db_cell(item = 'a', ts = pd.Series([1,2,4], [4,5,6]), b = 2))
     table.update_one(db_cell(item = 'a', ts = pd.Series([0,0,0], [4,5,6]), b = 3))
-
     table.deleted[1]
-    
+    table.delete()
     table.drop(True)
+
+
+def test_saving_binary_works():
+    table = sql_table(db = 'test_db', schema = 'dbo', table = 'test_saving_binary_works', pk = 'item', nullable = dict(bin = bin), doc = False)
+    table.insert(dict(item = 'a', bin = pd.Series([1,2,3])))   
+    table.insert(dict(item = 'b', bin = pd.Series([4,5,6])))   
+    assert len(table)>=2
+    assert table.item == ['a', 'b']
+    table.drop()
+

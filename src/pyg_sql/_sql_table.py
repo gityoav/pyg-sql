@@ -675,6 +675,7 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
     return res
         
 
+### global. indexed on server and db
 SESSIONS = dict()
 
 
@@ -1044,7 +1045,7 @@ class sql_cursor(object):
         self.db = db
         self.server = server
         self.engine = engine or get_engine(db = self.db, server = self.server)
-        self.session = session
+        self.session = session # can potentially pass sessions around
         self.spec = spec
         self.selection = selection
         self.order = order
@@ -1069,23 +1070,13 @@ class sql_cursor(object):
             if set to True, when exiting the context, will rollback rather than commit
                     
         """
-        if valid_session(self.session):
-            if dry_run is not None:
-                self.dry_run = None if dry_run == 'none' else dry_run
-                address = self.address
-                SESSIONS[address] = self.session                
-            return self
-        ## we will manage jointly with all the other sessions but only if dry_run is not None
-        dry_run = self.dry_run
-        if dry_run is not None: ## we want to be within a transaction so we cache the connection 
-            address = self.address
-            session = SESSIONS.get(address) 
-            if session is None:
-                session = self.session_maker(self.engine)
-            SESSIONS[address] = session
-            self.session = session
-        else:
-            self.session = self.session_maker(self.engine)
+        if self.session is None:
+            address = (self.server, self.db)        
+            if address not in SESSIONS:
+                SESSIONS[address] = self.session_maker(self.engine)
+            self.session = SESSIONS[address]
+        if dry_run is not None:
+            self.dry_run = dry_run
         return self
     
     def create_index(self, *columns, name = None, unique = False):
@@ -1161,17 +1152,17 @@ class sql_cursor(object):
             
 
         """
+        session = self.connect().session
         try:
-            res = self.connect().session.execute(statement, *args, **kwargs)
+            res = session.execute(statement, *args, **kwargs)
         except (sa.exc.PendingRollbackError, sa.exc.DisconnectionError, sa.exc.InvalidatePoolError) as e: ## if session has expired, we reconnect
         #except (pyodbc.OperationalError, sa.exc.PendingRollbackError, sa.exc.DisconnectionError, sa.exc.InvalidatePoolError) as e: ## if session has expired, we reconnect
-            address = self.address
-            if address in SESSIONS:
-                SESSIONS[address] = None
-                self.session = None
-                res = self.connect().session.execute(statement, *args, **kwargs)                
+            address = (self.server, self.db)            
+            if self.session == SESSIONS[address]: ## this is a shared session thingamy
+                session = self.session = SESSIONS[address] = self.session_maker(self.engine) # invalidate the session and create a new one
+                res = session.execute(statement, *args, **kwargs)
             else:
-                raise e                
+                raise e
         if transform:
             res = transform(res)
         return res
@@ -1200,8 +1191,7 @@ class sql_cursor(object):
             t.delete()
             
         """
-        if not valid_session(self.session):
-            self.session = Session(self.engine)
+        self.connect()
         self.session.__enter__()
         return self
 
@@ -1219,6 +1209,7 @@ class sql_cursor(object):
         self.commit()
         if valid_session(self.session):
             self.session.__exit__(type, value, traceback)
+        self.dry_run = None
         return self
     
     

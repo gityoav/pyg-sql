@@ -1596,13 +1596,14 @@ class sql_cursor(object):
             bad_keys = {key: value for key, value in edoc.items() if key not in columns}
             if len(bad_keys) > 0:
                 raise ValueError(f'cannot insert into db a document with these keys: {bad_keys}. The table only has these keys: {columns}')        
-        res = self._write_doc(edoc, columns = columns) if write else edoc
         if self._pk and not self._is_archived():
-            doc_id = self._id(res)
-            res_no_ids = type(res)({k : v for k, v in res.items() if k not in ids}) if ids else res
+            doc_id = self._id(edoc)
             tbl = self.inc().inc(**doc_id)
             read = tbl.sort(ids)._read_statement() ## row format
-            docs = tbl._rows_to_docs(reader = False, load = False, **read) ## do not transform the document, keep in raw format?
+            #docs = tbl._rows_to_docs(reader = False, load = False, **read) ## do not transform the document, keep in raw format?
+            docs = tbl._rows_to_docs(**read) ## do not transform the document, keep in raw format?
+            res = self._write_doc(edoc, columns = columns) if write else edoc
+            res_no_ids = type(res)({k : v for k, v in res.items() if k not in ids}) if ids else res
             if len(docs) == 0:
                 self.execute(self.table.insert(),[res_no_ids])
                 if ids:    
@@ -1621,10 +1622,12 @@ class sql_cursor(object):
                         if i in d:
                             del d[i]
                     d[_deleted] = deleted
-                self.archived().insert_many(docs, write = False)
+                #self.archived().insert_many(docs, write = False)
+                self.archived().insert_many(docs)
                 self.inc(self._id(latest)).update(**(res_no_ids))
                 doc.update(latest[ids])
         else:
+            res = self._write_doc(edoc, columns = columns) if write else edoc
             self.execute(self.table.insert(), [res])
         return doc
     
@@ -2211,16 +2214,46 @@ class sql_cursor(object):
         return is_str(self.schema) and self.schema.startswith(_archived)
 
     def archived(self):
+        """
+        When a table is indexed on primary keys, when we write to the table, to ensure full audit, we move existing records to an archive table
+        The archived table:
+            - lives in db.archive_schema.table
+            - is indexed on the original primary key + 'deleted' column, designating when the record was deleted
+            - has a modified writer: if you chose to save to c:/%key1/%key2.pickle, deleted data are saved to c:/%key1/%key2/%deleted.pickle
+
+        Example:
+        --------
+        >>> from pyg import * 
+        >>> t = sql_table(db = 'test_db', server = 'DESKTOP-LU5C5QF', schema = 'test', table = 'archiving_test', 
+                          pk = ['a', 'b'], doc = True, writer = 'c:/temp/%a/%b.parquet')
+        >>> t.delete()
+        
+        >>> old_doc = dict(a = 'a', b = 'b', data = pd.Series([1,2,3]))
+        >>> t.insert_one(old_doc)
+        
+        >>> t.delete()
+        >>> import os
+        >>> os.listdir('c:/temp/a/b')
+
+        >>> new_doc = dict(a = 'a', b = 'b', data = pd.Series([4,5,6]))
+        >>> t.insert_one(new_doc)
+        >>> assert t[0]['data'].sum() == 15
+        
+        >>> t.archived().sort('deleted')[-3]
+        """
         if self._is_archived():
             return self
         elif self._pk:
             schema = _archived + (self.schema or '')
             # logger.info('archived schema: %s'%schema)
             writer = self.writer
-            if is_str(writer) and _is_sql_writer.search(writer) is not None:
-                suffix = _is_sql_writer.search(writer).group(0)
+            if is_str(writer):
+                suffix = '.' + writer.split('.')[-1]
+            # if is_str(writer) and _is_sql_writer.search(writer) is not None:
+            #     suffix = _is_sql_writer.search(writer).group(0)
                 params = writer.split('/')
-                params[2] = schema
+                if _is_sql_writer.search(writer) is not None:
+                    params[2] = schema
                 writer = '/'.join(params)
                 writer = writer.replace(suffix,'/%deleted' + suffix)
                 

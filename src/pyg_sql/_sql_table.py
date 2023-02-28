@@ -913,15 +913,15 @@ class sql_cursor(object):
 
     Where did the data go to? We automatically archive the deleted old records for dict(name = 'yoav', surname = 'git') here:
 
-    >>> t.deleted 
+    >>> t.archived() 
     
-    t.deleted is a table by same name,
+    t.archived() is a table by same name,
     
     - exists on deleted_test database, 
     - same table structure with added 'deleted' column
     
-    >>> assert len(t.deleted.inc(name = 'yoav', age = 46)) > 0
-    >>> t.deleted.delete() 
+    >>> assert len(t.archived().inc(name = 'yoav', age = 46)) > 0
+    >>> t.archived().delete() 
 
     ## sql_cursor as a document store
 
@@ -1425,7 +1425,7 @@ class sql_cursor(object):
         if self.selection or self.spec:
             raise ValueError('To avoid confusing .delete and .drop, dropping a table can only be done if there is no selection and no filtering')
         if deleted and self._pk:
-            self.deleted.drop()
+            self.archived().drop()
         logger.info('dropping table: %s.%s.%s'%(_database(self.db), 
                                                   self.schema, 
                                                   self.table.name))
@@ -1597,7 +1597,7 @@ class sql_cursor(object):
             if len(bad_keys) > 0:
                 raise ValueError(f'cannot insert into db a document with these keys: {bad_keys}. The table only has these keys: {columns}')        
         res = self._write_doc(edoc, columns = columns) if write else edoc
-        if self._pk and not self._is_deleted():
+        if self._pk and not self._is_archived():
             doc_id = self._id(res)
             res_no_ids = type(res)({k : v for k, v in res.items() if k not in ids}) if ids else res
             tbl = self.inc().inc(**doc_id)
@@ -1621,7 +1621,7 @@ class sql_cursor(object):
                         if i in d:
                             del d[i]
                     d[_deleted] = deleted
-                self.deleted.insert_many(docs, write = False)
+                self.archived().insert_many(docs, write = False)
                 self.inc(self._id(latest)).update(**(res_no_ids))
                 doc.update(latest[ids])
         else:
@@ -1909,7 +1909,7 @@ class sql_cursor(object):
             rs = rs(**{k : v for k,v in self.defaults.items() if k not in rs.keys()})
         rs = _relabel(rs, self.columns, strict = False)
         if len(rs) > 0:
-            if self._pk and not self._is_deleted():
+            if self._pk and not self._is_archived():
                 _ = [self.insert_one(doc, write = write) for doc in rs]
             else:
                 columns = self.columns - self._ids
@@ -2115,7 +2115,7 @@ class sql_cursor(object):
             return self
         ids = self._ids
         if len(res):
-            if self._pk and not self._is_deleted(): ## we first copy the existing data out to deleted db
+            if self._pk and not self._is_archived(): ## we first copy the existing data out to deleted db
                 read = self._read_statement() 
                 docs = self._rows_to_docs(reader = False, load = False, **read)
                 #docs = self._rows_to_docs(load = True, **read)
@@ -2125,7 +2125,7 @@ class sql_cursor(object):
                     for i in ids:
                         if i in doc:
                             del doc[i]
-                self.deleted.insert_many(docs, write = False)
+                self.archived().insert_many(docs, write = False)
             res.full_delete()
         return self
 
@@ -2207,13 +2207,12 @@ class sql_cursor(object):
                                                                                               statement = text)
         return res
 
-    def _is_deleted(self):
+    def _is_archived(self):
         return is_str(self.schema) and self.schema.startswith(_archived)
 
-    @property
-    def deleted(self):
-        if self._is_deleted():
-            return self.distinct('deleted')
+    def archived(self):
+        if self._is_archived():
+            return self
         else:
             schema = _archived + (self.schema or '')
             # logger.info('archived schema: %s'%schema)

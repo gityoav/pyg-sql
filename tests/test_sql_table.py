@@ -50,10 +50,10 @@ def test_doc_store_save_and_read_dictable():
     
     assert len(t) == 1
     assert eq(t[0]-'db', doc-'db')
-    assert eq(t.deleted[0] - 'deleted' - 'db' , doc -'db')
-    assert len(t.deleted) > 1
+    assert eq(t.archived()[0] - 'deleted' - 'db' , doc -'db')
+    assert len(t.archived()) > 1
 
-    t.deleted.drop()
+    t.archived().drop()
     t.drop()
     with pytest.raises(sa.exc.DBAPIError):
         print(t)
@@ -94,8 +94,8 @@ def test_writable_doc_store_save_and_read():
     ## acess of archived data directly
     
     key = docs[0].key
-    assert len(t.deleted.inc(key = key))>1
-    doc = t.deleted.inc(key = key)[0]
+    assert len(t.archived().inc(key = key))>1
+    doc = t.archived().inc(key = key)[0]
     eq(doc - 'deleted', docs[0])
 
 
@@ -107,7 +107,7 @@ def test_archive_does_not_update():
     table.update_one(db_cell(item = 'a', ts = pd.Series([1,2,3], [4,5,6]), b = 1))
     table.update_one(db_cell(item = 'a', ts = pd.Series([1,2,4], [4,5,6]), b = 2))
     table.update_one(db_cell(item = 'a', ts = pd.Series([0,0,0], [4,5,6]), b = 3))
-    table.deleted[1]
+    table.archived()[1]
     table.delete()
     table.drop(True)
 

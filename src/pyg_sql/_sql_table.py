@@ -2211,7 +2211,9 @@ class sql_cursor(object):
         return is_str(self.schema) and self.schema.startswith(_archived)
 
     def archived(self):
-        if self._pk and not self._is_archived():
+        if self._is_archived():
+            return self
+        elif self._pk:
             schema = _archived + (self.schema or '')
             # logger.info('archived schema: %s'%schema)
             writer = self.writer
@@ -2236,6 +2238,7 @@ class sql_cursor(object):
             res.selection = self.selection
             return res
         else:
+            logger.info('cannot create an archived table if original table has no primary keys')
             return self
                 
     @property

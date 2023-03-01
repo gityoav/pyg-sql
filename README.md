@@ -152,7 +152,7 @@ It is important to realise that we already have much flexibility behind the scen
 
 Primary Keys are applied if the primary keys (pk) are specified. 
 Now, when we insert into a table, if another record with same pk exists, the record will be replaced.
-Rather than simply delete old records, we create automatically a parallel deleted_database.table to auto-archive these replaced records.
+Rather than simply delete old records, we create automatically a parallel database.archived_schema.table to auto-archive these replaced records.
 This ensure a full audit and roll-back of records is possible.
 
     :Example: primary keys and deleted records
@@ -181,15 +181,15 @@ This ensure a full audit and roll-back of records is possible.
 
     Where did the data go to? We automatically archive the deleted old records for dict(name = 'yoav', surname = 'git') here:
 
-    >>> t.deleted 
+    >>> t.archived()
     
-    t.deleted is a table by same name,
+    t.archived() is a table by same name,
     
-    - exists on deleted_test database, 
-    - same table structure with added 'deleted' column
+    - exists on same database, schema name changed prefixed with 'archived_'
+    - same table structure with added 'deleted' column into the primary keys
     
-    >>> assert len(t.deleted.inc(name = 'yoav', age = 46)) > 0
-    >>> t.deleted.delete() 
+    >>> assert len(t.archived().inc(name = 'yoav', age = 46)) > 0
+    >>> t.archived().delete() 
 
 ## sql_cursor as a document store
 
@@ -212,7 +212,7 @@ This ensure a full audit and roll-back of records is possible.
                           pk = ['name', 'surname'],
                           doc = True)   ##<---- The table will actually be a document store
 
-    We are now able to keep varied structure per each record. We are only able to filter against the columns specified above
+    We are now able to keep varied structure per each record. 
 
     >>> t = t.delete()
     

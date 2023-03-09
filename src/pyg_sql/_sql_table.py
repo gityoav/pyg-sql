@@ -2279,13 +2279,19 @@ class sql_cursor(object):
         >>> new_doc = dict(a = 'a', b = 'b', data = pd.Series([4,5,6]))
         >>> t.insert_one(new_doc)
         
+
         ## the old data for the document should be here...
         >>> import os
         >>> assert len(os.listdir('c:/temp/archive/a/b')) > 0
         
         ## the old document should be here...
         >>> assert t.archived().schema == 'archive'
+        >>> assert len(t.archived()) > 0
+
+        ### archive of archive is the same
+        >>> assert t.archived()._is_archived()
         >>> assert t.archived().archived().schema == 'archive'
+        >>> t.drop(True)
         --------
         """
         if self._is_archived():

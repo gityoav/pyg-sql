@@ -467,7 +467,8 @@ def sql_has_table(table_name, schema, db, server, engine = None):
 
 def sql_table(table, db = None, non_null = None, nullable = None, _id = None, schema = None, 
               server = None, reader = None, writer = None, pk = None, doc = None, mode = None, 
-              spec = None, selection = None, order = None, defaults = None, joint = None, create = None, engine = None, session = None, dry_run = None):
+              spec = None, selection = None, order = None, defaults = None, joint = None, create = None, 
+              engine = None, session = None, dry_run = None, archive_schema = None, archive_writer = None):
     """
     Creates a sql table. Can also be used to simply read table from the db
     Parameters
@@ -566,6 +567,8 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         server = table.keywords.get('server') if server is None else server
         writer = table.keywords.get('writer') if writer is None else writer
         engine = table.keywords.get('engine') if engine is None else engine
+        archive_schema = table.keywords.get('archive_schema') if archive_schema is None else archive_schema
+        archive_writer = table.keywords.get('archive_writer') if archive_writer is None else archive_writer
         doc = table.keywords.get('doc') if doc is None else doc
         pk = table.keywords.get('pk') if pk is None else pk
         table = table.keywords['table']
@@ -579,6 +582,8 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         server = table.server if server is None else server
         engine = table.engine if engine is None else engine
         writer = table.writer if writer is None else writer
+        archive_schema = table.archive_schema if archive_schema is None else archive_schema
+        archive_writer = table.archive_writer if archive_writer is None else archive_writer
         doc = table.doc if doc is None else doc
         pk = table.pk if pk is None else pk
         table = table.name
@@ -671,7 +676,8 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
     res = sql_cursor(table = tbl, schema = schema, db = db, server = server, engine = e, 
                      reader = reader, writer = writer, defaults = defaults,
                      pk = list(pk) if isinstance(pk, dict) else pk, doc = doc,
-                     spec = spec, selection = selection, order = order, joint = joint, session = session, dry_run = dry_run)
+                     spec = spec, selection = selection, order = order, joint = joint, session = session, dry_run = dry_run,
+                     archive_writer = archive_writer, archive_schema = archive_schema)
     return res
         
 
@@ -987,7 +993,7 @@ class sql_cursor(object):
     
     def __init__(self, table, schema = None, db = None, engine = None, server = None, session = None, dry_run = None,
                  spec = None, selection = None, order = None, joint = None, reader = None, writer = None,
-                 pk = None, defaults = None, doc = None, **_):
+                 pk = None, defaults = None, doc = None, archive_schema = None, archive_writer = None, **_):
         """
         Parameters
         ----------
@@ -1017,10 +1023,18 @@ class sql_cursor(object):
             This is only relevant to document store and specifies how documents that contain complicated objects are transformed. e.g. Use writer = 'c:/%key1/%key2.parquet' to specify documents saved to parquet based on document keys        
         doc: bool
             Specifies if to create the table as a document store
-            
+        archive_schema: str
+            schema where the archive table is saved
+        archive_writer: str
+            location where archived documents are to be saved
         """
         if is_str(table):
-            table = sql_table(table = table, schema = schema, db = db, server = server)
+            ### you shouldn't really construct the table using sql_cursor, sql_table should be the entry point.
+            table = sql_table(table = table, schema = schema, db = db, server = server, 
+                              engine = engine, session = session, dry_run = dry_run,
+                              pk = pk, doc = doc, 
+                              reader = reader, writer = writer, 
+                              archive_schema = archive_schema, archive_writer = archive_writer)
             
         if isinstance(table, sql_cursor):
             db = table.db if db is None else db
@@ -1038,6 +1052,8 @@ class sql_cursor(object):
             pk = table.pk if pk is None else pk
             doc = table.doc if doc is None else doc
             defaults = table.defaults if defaults is None else defaults
+            archive_schema = table.archive_schema if archive_schema is None else archive_schema
+            archive_writer = table.archive_writer if archive_writer is None else archive_writer
             table = table.table
     
         self.table = table
@@ -1052,6 +1068,8 @@ class sql_cursor(object):
         self.joint = joint
         self.reader = reader
         self.writer = writer
+        self.archive_schema = archive_schema
+        self.archive_writer = archive_writer
         self.pk = pk
         self.defaults = defaults
         self.doc = doc
@@ -2211,7 +2229,7 @@ class sql_cursor(object):
         return res
 
     def _is_archived(self):
-        return is_str(self.schema) and self.schema.startswith(_archived)
+        return is_str(self.schema) and (self.schema.startswith(_archived) or self.schema == self.archive_schema)
 
     def archived(self):
         """
@@ -2221,6 +2239,13 @@ class sql_cursor(object):
             - is indexed on the original primary key + 'deleted' column, designating when the record was deleted
             - has a modified writer: if you chose to save to c:/%key1/%key2.pickle, deleted data are saved to c:/%key1/%key2/%deleted.pickle
 
+        Parameters
+        ----------
+        schema: str
+            an alternative schema where the archive table is to be saved. by default, archive_current_schema is used
+        writer: str
+            an alternative location where archived documents are to be saved. by default, %deleted is added to end of location.
+            
         Example:
         --------
         >>> from pyg import * 
@@ -2240,23 +2265,48 @@ class sql_cursor(object):
         >>> assert t[0]['data'].sum() == 15
         
         >>> t.archived().sort('deleted')[-3]
+        
+        Example: using a specified archive_writer and archive_schema
+        ---------
+        >>> from pyg import * 
+        >>> t = sql_table(db = 'test_db', schema = 'test', table = 'archiving_test', 
+                          pk = ['a', 'b'], doc = True, writer = 'c:/temp/%a/%b.parquet',
+                          archive_schema = 'archive', 
+                          archive_writer = 'c:/temp/archive/%a/%b/%deleted.parquet')
+        >>> t.delete()
+        >>> old_doc = dict(a = 'a', b = 'b', data = pd.Series([1,2,3]))
+        >>> t.insert_one(old_doc)        
+        >>> new_doc = dict(a = 'a', b = 'b', data = pd.Series([4,5,6]))
+        >>> t.insert_one(new_doc)
+        
+        ## the old data for the document should be here...
+        >>> import os
+        >>> assert len(os.listdir('c:/temp/archive/a/b')) > 0
+        
+        ## the old document should be here...
+        >>> assert t.archived().schema == 'archive'
+        >>> assert t.archived().archived().schema == 'archive'
+        --------
         """
         if self._is_archived():
             return self
         elif self._pk:
-            schema = _archived + (self.schema or '')
-            # logger.info('archived schema: %s'%schema)
-            writer = self.writer
-            if is_str(writer):
-                suffix = '.' + writer.split('.')[-1]
-            # if is_str(writer) and _is_sql_writer.search(writer) is not None:
-            #     suffix = _is_sql_writer.search(writer).group(0)
-                params = writer.split('/')
-                if _is_sql_writer.search(writer) is not None:
-                    params[2] = schema
-                writer = '/'.join(params)
-                writer = writer.replace(suffix,'/%deleted' + suffix)
-                
+            schema = self.archive_schema
+            writer = self.archive_writer
+            if schema is None:
+                schema = _archived + (self.schema or '')
+            if writer is None:
+                # logger.info('archived schema: %s'%schema)
+                writer = self.writer
+                if is_str(writer):
+                    suffix = '.' + writer.split('.')[-1]
+                # if is_str(writer) and _is_sql_writer.search(writer) is not None:
+                #     suffix = _is_sql_writer.search(writer).group(0)
+                    params = writer.split('/')
+                    if _is_sql_writer.search(writer) is not None:
+                        params[2] = schema
+                    writer = '/'.join(params)
+                    writer = writer.replace(suffix,'/%deleted' + suffix)                
             res = sql_table(table = self.table, 
                             db = self.db, 
                             non_null = dict(deleted = datetime.datetime), 
@@ -2265,7 +2315,9 @@ class sql_cursor(object):
                             doc = self.doc, 
                             writer = writer, 
                             reader = self.reader, 
-                            schema = schema)
+                            schema = schema, 
+                            archive_schema = self.archive_schema,
+                            archive_writer = self.archive_writer)
             #res.spec = self.spec THIS NEEDS TO BE IMPLEMENTED PROPERLY
             res.order = self.order
             res.selection = self.selection

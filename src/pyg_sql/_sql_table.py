@@ -1614,39 +1614,31 @@ class sql_cursor(object):
             bad_keys = {key: value for key, value in edoc.items() if key not in columns}
             if len(bad_keys) > 0:
                 raise ValueError(f'cannot insert into db a document with these keys: {bad_keys}. The table only has these keys: {columns}')        
-        if self._pk and not self._is_archived():
-            doc_id = self._id(edoc)
-            tbl = self.inc().inc(**doc_id)
-            read = tbl.sort(ids)._read_statement() ## row format
-            #docs = tbl._rows_to_docs(reader = False, load = False, **read) ## do not transform the document, keep in raw format?
+        doc_id = self._id(edoc)
+        res = self._write_doc(edoc, columns = columns) if write else edoc
+        res_no_ids = type(res)({k : v for k, v in res.items() if k not in ids}) if ids else res
+        tbl = self.inc().inc(**doc_id)
+        if ((not self._pk) or self._is_archived()):
+            if _deleted not in res:
+                res_no_ids[_deleted] = res[_deleted] = datetime.datetime.now()
+            if len(tbl):           
+                tbl.full_delete()
+        if len(tbl) == 0: ## no existing documents
+            self.execute(self.table.insert(),[res_no_ids])
+            if ids:
+                doc.update(tbl[0][ids])                
+        else: ## should only happen to non-archiving table
+            read = tbl.sort(ids)._read_statement() ## raw format
+            read['data'] = read['data'][-1:] ## just the last document
             docs = tbl._rows_to_docs(**read) ## do not transform the document, keep in raw format?
-            res = self._write_doc(edoc, columns = columns) if write else edoc
-            res_no_ids = type(res)({k : v for k, v in res.items() if k not in ids}) if ids else res
-            if len(docs) == 0:
-                self.execute(self.table.insert(),[res_no_ids])
-                if ids:    
-                    latest = tbl[0]
-                    doc.update(latest[ids])
-            else:                
-                if len(docs) == 1:
-                    latest = docs[0] 
-                else:
-                    latest = docs[-1]
-                    tbl.exc(**tbl._id(latest)).full_delete()
-                latest = Dict(latest)
-                deleted = datetime.datetime.now()
-                for d in docs:
-                    for i in ids:
-                        if i in d:
-                            del d[i]
-                    d[_deleted] = deleted
-                #self.archived().insert_many(docs, write = False)
-                self.archived().insert_many(docs)
-                self.inc(self._id(latest)).update(**(res_no_ids))
-                doc.update(latest[ids])
-        else:
-            res = self._write_doc(edoc, columns = columns) if write else edoc
-            self.execute(self.table.insert(), [res])
+            #docs = tbl._rows_to_docs(reader = False, load = False, **read) ## do not transform the document, keep in raw format?
+            latest = docs[-1]
+            tbl.exc(**tbl._id(latest)).full_delete()
+            latest = Dict(latest)
+            self.inc(self._id(latest)).update(**(res_no_ids))
+            doc.update(latest[ids])
+            latest[_deleted] = datetime.datetime.now()
+            self.archived().insert_one(latest)
         return doc
     
     
@@ -2314,8 +2306,7 @@ class sql_cursor(object):
                     writer = '/'.join(params)
                     writer = writer.replace(suffix,'/%deleted' + suffix)                
             res = sql_table(table = self.table, 
-                            db = self.db, 
-                            non_null = dict(deleted = datetime.datetime), 
+                            db = self.db,                 
                             server = self.server, 
                             pk = self._pk + [_deleted], 
                             doc = self.doc, 

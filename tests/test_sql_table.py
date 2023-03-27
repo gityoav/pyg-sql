@@ -96,11 +96,11 @@ def test_writable_doc_store_save_and_read():
     key = docs[0].key
     assert len(t.archived().inc(key = key))>1
     doc = t.archived().inc(key = key)[0]
-    eq(doc - 'deleted', docs[0])
+    assert eq(doc - 'deleted', docs[0])
 
 
 def test_archive_does_not_update():
-    table = sql_table(db = 'test_db', schema = 'dbo', table = 'data', pk = 'item', doc = True,
+    table = sql_table(db = 'test_db', schema = 'dbo', table = 'test_archive_does_not_update', pk = 'item', doc = True,
                       writer = '/test_db/dbo/datas/%item.sql'
                       )
     table.delete()

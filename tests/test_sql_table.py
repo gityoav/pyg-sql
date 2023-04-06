@@ -127,16 +127,13 @@ def test_getting_engine_from_session():
     session = Session(e)
     assert isinstance(get_engine(session = session), Engine)
 
-def test_creating_tables_with_session_rather_than_engine():
-    table = 'test_creating_tables_with_session_rather_than_engine'
-    table = 'this_table'
+def test_running_with_external_session():
+    table = 'test_running_with_external_session'
     t = sql_table(db = 'test_db', schema = 'dbo', table = table, pk = 'item', nullable = ['a', 'b'], doc = False)
     t = t.delete()
     assert len(t) == 0
     assert t.session is None
     assert t.connect() is not None
-    session = t.connect()
-    print(session)
     with Session(e) as session:
         tbl = sql_table(db = 'test_db', schema = 'dbo', table = table, pk = 'item', nullable = ['a', 'b'], doc = False, session = session, dry_run = True)
         tbl.insert_one(dict(a = 'a', b = 'b', item = 'item'))
@@ -147,3 +144,33 @@ def test_creating_tables_with_session_rather_than_engine():
         tbl.insert_one(dict(a = 'a', b = 'b', item = 'item'))
         session.commit()
     assert len(t) == 1
+    t.drop()
+
+
+def test_running_with_context():
+    table = 'test_running_with_context'
+    t = sql_table(db = 'test_db', schema = 'dbo', table = table, pk = 'item', nullable = ['a', 'b'], doc = False)
+    t = t.delete()
+    assert len(t) == 0
+    with t.context(dry_run = True) as tbl:
+        tbl.insert_one(dict(a = 'a', b = 'b', item = 'item'))
+    assert len(t) == 0
+    with t as tbl:
+        tbl.insert_one(dict(a = 'a', b = 'b', item = 'item'))
+    assert len(t) == 0
+    with t.context(dry_run = False) as tbl:
+        tbl.insert_one(dict(a = 'a', b = 'b', item = 'item'))
+    assert len(t) == 1
+    t.drop(True)
+    
+def test_running_with_no_context():
+    table = 'test_running_with_no_context'
+    t = sql_table(db = 'test_db', schema = 'dbo', table = table, pk = 'item', nullable = ['a', 'b'], doc = False)
+    t = t.delete()
+    assert len(t) == 0
+    t.insert_one(dict(a = 'a', b = 'b', item = 'item'))
+    assert len(t) == 1
+    t.drop(True)
+    
+    
+

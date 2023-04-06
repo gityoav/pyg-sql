@@ -1141,8 +1141,8 @@ class sql_cursor(object):
         return type(self)(self, **kwargs)
 
     
-    def context(self, dry_run = True):
-        return self.copy(dry_run = dry_run)
+    def context(self, dry_run = True, session = None):
+        return self.copy(dry_run = dry_run, session = session)
 
         
     def connect(self, session = None):
@@ -1241,6 +1241,8 @@ class sql_cursor(object):
         session = self.connect()
         try:
             res = session.execute(statement, *args, **kwargs)
+            if transform:
+                res = transform(res)
             if self.session is None and self.dry_run is None:
                 session.commit()
         except (sa.exc.PendingRollbackError, sa.exc.DisconnectionError, sa.exc.InvalidatePoolError) as e: ## if session has expired, we reconnect
@@ -1248,12 +1250,12 @@ class sql_cursor(object):
                 address = (self.server, self.db)            
                 session = SESSIONS[address] = self.session_maker(self.engine) # invalidate the session and create a new one
                 res = session.execute(statement, *args, **kwargs)
+                if transform:
+                    res = transform(res)
                 if self.session is None and self.dry_run is None:
                     session.commit()
             else:
                 raise e
-        if transform:
-            res = transform(res)
         return res
     
     def commit(self):
@@ -1280,6 +1282,8 @@ class sql_cursor(object):
             t.delete()
             
         """
+        if self.dry_run is None:
+            self.dry_run = True
         self.connect().__enter__()
         return self
 

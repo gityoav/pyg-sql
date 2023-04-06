@@ -1016,6 +1016,39 @@ class sql_cursor(object):
     >>> read_from_file = pd_read_parquet('c:/temp/yoav/git/salary.parquet')
     >>> assert list(read_from_db.salary.values) == [100, 200, 300]
     >>> assert list(read_from_file.values) == [100, 200, 300]
+    
+    
+    Session management
+    ------------------
+    There are three modes we want to support:
+    
+    launch and forget:
+        t = sql_table(...)
+        t.insert_one() ## run and commit
+        t.insert_one() ## run and commit
+        
+    internal context run:
+        t = sql_table(...)
+        with t.context(dry_run = True): ## session is still none, but dry_run must be set
+            assert t.session is None
+            t.insert_one() ## do not commit yet
+            t.insert_one() ## do not commit yet
+        ## committed upon __exit__ of context
+        
+    externally managed context:
+        with Session(engine) as session:
+            t = sql_table(..., session = session)
+            t.insert_one() ## do not commit yet
+            t.insert_one() ## do not commit
+            session.commit()
+    
+        
+        
+    
+    
+    
+    
+    
     """
     
     session_maker = Session
@@ -1107,7 +1140,12 @@ class sql_cursor(object):
     def copy(self, **kwargs):
         return type(self)(self, **kwargs)
 
-    def connect(self, session = None, dry_run = None):
+    
+    def context(self, dry_run = True):
+        return self.copy(dry_run = dry_run)
+
+        
+    def connect(self, session = None):
         """
         Creates a valid session and attach it to the cursor
         
@@ -1117,8 +1155,6 @@ class sql_cursor(object):
             if set to True, when exiting the context, will rollback rather than commit
                     
         """
-        if dry_run is not None:
-            self.dry_run = dry_run
         if session is not None:
             self.session = session
         if self.session is None:
@@ -1203,16 +1239,17 @@ class sql_cursor(object):
 
         """
         session = self.connect()
-        #print('statement', statement, 'session', session)
         try:
             res = session.execute(statement, *args, **kwargs)
-            #print('session executed')
+            if self.session is None and self.dry_run is None:
+                session.commit()
         except (sa.exc.PendingRollbackError, sa.exc.DisconnectionError, sa.exc.InvalidatePoolError) as e: ## if session has expired, we reconnect
-        #except (pyodbc.OperationalError, sa.exc.PendingRollbackError, sa.exc.DisconnectionError, sa.exc.InvalidatePoolError) as e: ## if session has expired, we reconnect
-            address = (self.server, self.db)            
-            if self.session == SESSIONS[address]: ## this is a shared session thingamy
-                session = self.session = SESSIONS[address] = self.session_maker(self.engine) # invalidate the session and create a new one
+            if self.session is None:        
+                address = (self.server, self.db)            
+                session = SESSIONS[address] = self.session_maker(self.engine) # invalidate the session and create a new one
                 res = session.execute(statement, *args, **kwargs)
+                if self.session is None and self.dry_run is None:
+                    session.commit()
             else:
                 raise e
         if transform:

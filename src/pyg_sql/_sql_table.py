@@ -394,19 +394,40 @@ def get_cstr(*pairs, **connection):
         return 'mssql+pyodbc://%(server)s/%(db)s%(params)s'%dict(server=server, db = db, params = '?' +params if params else '')
 
 
-def create_schema(engine, schema, create = True):
+def create_schema(engine, schema, create = True, session = None):
+    """
+    creates a new schema for a particular engine.
+
+    Parameters
+    ----------
+    engine : sql engine
+        engine used to verify that the database has/does not have a specific schema
+    schema : str
+        name of a schema.
+    create : bool/str
+        If set to True, will create a missing schema. Alternatively, if create is set to either 'database' or 'schema' will also create schema
+    session : sql ORM session, optional
+        If provided, will use this to execute a session. The default is None.
+
+
+    Returns
+    -------
+    schema : str
+        name of a schema
+
+    """
     if schema is None:
         return
     try:
         if schema not in engine.dialect.get_schema_names(engine):
-            if create is True or (is_str(create) and ('s' in create.lower() or 'd' in create.lower())):
-                engine.execute(sa.schema.CreateSchema(schema))
+            if create is True or (is_str(create) and (create.lower()[0] in 'sd')):
+                (session or engine).execute(sa.schema.CreateSchema(schema))
             else:
                 raise ValueError(f'Schema {schema} does not exist. You have to explicitly mandata the creation of a schema by setting create=True or create="d" or create="s"')
             logger.info('creating schema: %s'%schema)
     except AttributeError: #MS SQL vs POSTGRES
         if not engine.dialect.has_schema(engine, schema):
-            engine.execute(sa.schema.CreateSchema(schema))
+            (session or engine).execute(sa.schema.CreateSchema(schema))
             logger.info('creating schema: %s'%schema)
     return schema
     
@@ -420,12 +441,17 @@ def _get_engine(*pairs, **connection):
     server = get_server(connection.pop('server', None))
     if isinstance(server, Engine):
         return server
-    connection['driver'] = get_driver(connection.pop('driver', None))
+    elif isinstance(server, Session):
+        return server.get_bind()
+    session = connection.pop('session', None)
+    if session is not None:
+        return session.get_bind()
     engine = connection.pop('engine', None)
-    create = connection.pop('create', False)
-    db = _db(connection)    
     if isinstance(engine, Engine):
         return engine
+    connection['driver'] = get_driver(connection.pop('driver', None))
+    create = connection.pop('create', False)
+    db = _db(connection)    
     cstr = get_cstr(server=server, db = db, **connection)    
     if callable(engine): # delegates connection to another function
         e = Dict(server = server, db = db, environment = server, connection = cstr).apply(engine)
@@ -453,14 +479,14 @@ def get_engine(*pairs, **connection):
     
 
 @cache
-def _get_table(table_name, schema, db, server, create, engine = None):
-    e = _get_engine(server = server, db = db, schema = schema, create = create, engine = engine)
+def _get_table(table_name, schema, db, server, create, engine = None, session = None):
+    e = _get_engine(server = server, db = db, schema = schema, create = create, engine = engine, session = session)
     meta = MetaData()
     return Table(table_name, meta, autoload_with = e, schema = schema)
 
 
-def sql_has_table(table_name, schema, db, server, engine = None):
-    e = _get_engine(server = server, db = db, schema = schema, create = False, engine = engine)
+def sql_has_table(table_name, schema, db, server, engine = None, session = None):
+    e = _get_engine(server = server, db = db, schema = schema, create = False, engine = engine, session = session)
     return sa.inspect(e).has_table(table_name)
         
 
@@ -567,6 +593,8 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         server = table.keywords.get('server') if server is None else server
         writer = table.keywords.get('writer') if writer is None else writer
         engine = table.keywords.get('engine') if engine is None else engine
+        session = table.keywords.get('session') if session is None else session
+        dry_run = table.keywords.get('dry_run') if dry_run is None else dry_run
         archive_schema = table.keywords.get('archive_schema') if archive_schema is None else archive_schema
         archive_writer = table.keywords.get('archive_writer') if archive_writer is None else archive_writer
         doc = table.keywords.get('doc') if doc is None else doc
@@ -577,13 +605,14 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         #     return table
         # we want to remove 
         db = table.db if db is None else db
-        engine = table.engine if engine is None else engine            
+        engine = table.engine if engine is None else engine
+        session = table.session if session is None else session
         schema = table.schema if schema is None else schema
         server = table.server if server is None else server
-        engine = table.engine if engine is None else engine
         writer = table.writer if writer is None else writer
         archive_schema = table.archive_schema if archive_schema is None else archive_schema
         archive_writer = table.archive_writer if archive_writer is None else archive_writer
+        dry_run = table.dry_run if dry_run is None else dry_run
         doc = table.doc if doc is None else doc
         pk = table.pk if pk is None else pk
         table = table.name
@@ -650,11 +679,11 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
     if create is None:
         create = 's' if len(cols) else False
 
-    ## time to access/create tables        
-    e = _get_engine(server = server, db = db, schema = schema, create = create, engine = engine)
-    schema = create_schema(e, _schema(schema), create = create)
+    ## time to access/create tables
+    e = _get_engine(server = server, db = db, schema = schema, create = create, engine = engine, session = session)
+    schema = create_schema(e, _schema(schema), create = create, session = session)
     try:
-        tbl = _get_table(table_name = table_name, schema = schema, db = db, server = server, create = create, engine = e) ## by default we grab the existing table
+        tbl = _get_table(table_name = table_name, schema = schema, db = db, server = server, create = create, engine = e, session = session)
         if doc is None and _doc in [col.name for col in tbl.columns]:
             doc = _doc
     except sa.exc.NoSuchTableError:        
@@ -663,7 +692,7 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         meta = MetaData()
         if len(cols) == 0:
             raise ValueError('You seem to be trying to create a table with no columns? Perhaps you are trying to point to an existing table and getting its name wrong?')
-        if create is True or (is_str(create) and ('t' in create.lower() or 's' in create.lower() or 'd' in create.lower())):
+        if create is True or (is_str(create) and (create.lower()[0] in 'tsd')):
             logger.info('creating table: %s.%s.%s%s'%(db, schema, table_name, [col.name for col in cols]))
             tbl = Table(table_name, meta, *cols, schema = schema)
             meta.create_all(e)
@@ -673,10 +702,10 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
                 idx.create(e)
         else:
             raise ValueError(f'table {table_name} does not exist. You need to explicitly set create=True or create="t/s/d" to mandate table creation')
-    res = sql_cursor(table = tbl, schema = schema, db = db, server = server, engine = e, 
+    res = sql_cursor(table = tbl, schema = schema, db = db, server = server, engine = e, session = session, dry_run = dry_run,
                      reader = reader, writer = writer, defaults = defaults,
                      pk = list(pk) if isinstance(pk, dict) else pk, doc = doc,
-                     spec = spec, selection = selection, order = order, joint = joint, session = session, dry_run = dry_run,
+                     spec = spec, selection = selection, order = order, joint = joint, 
                      archive_writer = archive_writer, archive_schema = archive_schema)
     return res
         
@@ -1060,8 +1089,8 @@ class sql_cursor(object):
         self.schema = schema
         self.db = db
         self.server = server
-        self.engine = engine or get_engine(db = self.db, server = self.server)
-        self.session = session # can potentially pass sessions around
+        self.engine = engine or get_engine(db = db, server = server, sesion = session, engine = engine)
+        self.session = session 
         self.spec = spec
         self.selection = selection
         self.order = order
@@ -1075,10 +1104,10 @@ class sql_cursor(object):
         self.doc = doc
         self.dry_run = dry_run ## indicating we are within a transaction, please keep the same session
     
-    def copy(self):
-        return type(self)(self)
+    def copy(self, **kwargs):
+        return type(self)(self, **kwargs)
 
-    def connect(self, dry_run = None):
+    def connect(self, session = None, dry_run = None):
         """
         Creates a valid session and attach it to the cursor
         
@@ -1088,14 +1117,17 @@ class sql_cursor(object):
             if set to True, when exiting the context, will rollback rather than commit
                     
         """
+        if dry_run is not None:
+            self.dry_run = dry_run
+        if session is not None:
+            self.session = session
         if self.session is None:
             address = (self.server, self.db)        
             if address not in SESSIONS:
                 SESSIONS[address] = self.session_maker(self.engine)
-            self.session = SESSIONS[address]
-        if dry_run is not None:
-            self.dry_run = dry_run
-        return self
+            return SESSIONS[address]
+        else:
+            return self.session
     
     def create_index(self, *columns, name = None, unique = False):
         """
@@ -1170,9 +1202,11 @@ class sql_cursor(object):
             
 
         """
-        session = self.connect().session
+        session = self.connect()
+        #print('statement', statement, 'session', session)
         try:
             res = session.execute(statement, *args, **kwargs)
+            #print('session executed')
         except (sa.exc.PendingRollbackError, sa.exc.DisconnectionError, sa.exc.InvalidatePoolError) as e: ## if session has expired, we reconnect
         #except (pyodbc.OperationalError, sa.exc.PendingRollbackError, sa.exc.DisconnectionError, sa.exc.InvalidatePoolError) as e: ## if session has expired, we reconnect
             address = (self.server, self.db)            
@@ -1186,16 +1220,16 @@ class sql_cursor(object):
         return res
     
     def commit(self):
-        if valid_session(self.session):
-            if self.dry_run:
-                self.session.rollback()
-            else:
-                self.session.commit()
+        session = self.connect()
+        if self.dry_run:
+            session.rollback()
+        else:
+            session.commit()
         return self
 
     def rollback(self):
-        if valid_session(self.session):
-            self.session.rollback()
+        session = self.connect()
+        session.rollback()
         return self
         
     def __enter__(self):
@@ -1209,9 +1243,9 @@ class sql_cursor(object):
             t.delete()
             
         """
-        self.connect()
-        self.session.__enter__()
+        self.connect().__enter__()
         return self
+
 
     def __exit__(self, type, value, traceback):
         """
@@ -1225,15 +1259,10 @@ class sql_cursor(object):
             
         """
         self.commit()
-        if valid_session(self.session):
-            self.session.__exit__(type, value, traceback)
+        self.connect().__exit__(type, value, traceback)
         self.dry_run = None
         return self
-    
-    
-    def __del__(self):
-        self.commit()
-
+        
 
     @property
     def _ids(self):
@@ -2190,7 +2219,7 @@ class sql_cursor(object):
         if is_strs(keys):
             keys = self._col(keys)
             keys = [self.table.columns[k] for k in keys]
-        query = self.connect().session.query(*keys)
+        query = self.connect().query(*keys)
         if self.spec is not None:
             query = query.where(self.spec)        
         res = query.distinct().all()
@@ -2308,11 +2337,13 @@ class sql_cursor(object):
             res = sql_table(table = self.table, 
                             db = self.db,                 
                             server = self.server, 
+                            schema = schema, 
                             pk = self._pk + [_deleted], 
                             doc = self.doc, 
                             writer = writer, 
                             reader = self.reader, 
-                            schema = schema, 
+                            session = self.session,
+                            engine = self.engine,
                             archive_schema = self.archive_schema,
                             archive_writer = self.archive_writer)
             #res.spec = self.spec THIS NEEDS TO BE IMPLEMENTED PROPERLY
@@ -2687,7 +2718,7 @@ class sql_cursor(object):
 
 
 def pd_to_sql(df, table = None, db = None, server = None, schema = None, index = None, columns = None,
-              series = None, method = None, inc = None, 
+              series = None, method = None, inc = None, session = None, engine = None,
               duplicate = None, sort = None, chunksize = None, 
               upload_xor = True, **more_inc):
     """
@@ -2861,25 +2892,27 @@ def pd_to_sql(df, table = None, db = None, server = None, schema = None, index =
     for k, v in inc.items():
         res[k] = v
     if isinstance(table, (partial, sql_cursor)):
-        existing_table = sql_table(server = server, db = db, schema = schema, table = table)
+        existing_table = sql_table(server = server, db = db, schema = schema, table = table, engine = engine, session = session)
         table = existing_table.table
     else:
-        engine = _get_engine(server = server, db = db, schema = schema, create = False)
+        engine = _get_engine(server = server, db = db, schema = schema, session = session, engine = engine, create = False)
+        con = session or engine
         if not sa.inspect(engine).has_table(table):
-            res.to_sql(name = table, con = engine, schema = schema, chunksize = chunksize, 
+            res.to_sql(name = table, con = con, schema = schema, chunksize = chunksize, 
                        if_exists = 'append', index = True if index else False, index_label = index)
             return rtn
         else:
-            existing_table = sql_table(server = server, db = db, schema = schema, table = table)
+            existing_table = sql_table(server = server, db = db, schema = schema, table = table, engine = engine, session = session)
     engine = existing_table.engine
+    con = session or existing_table.engine
     if method is None or method == 'insert': # I don't care about duplicates
-        res.to_sql(name = table, con = engine, schema = schema, chunksize = chunksize, 
+        res.to_sql(name = table, con = con, schema = schema, chunksize = chunksize, 
                    if_exists = 'append', index = True if index else False, index_label = index)
         return rtn
-    existing_table = sql_table(server = server, db = db, schema = schema, table = table)
+    existing_table = sql_table(server = server, db = db, schema = schema, table = table, session = session, engine = engine)
     if method == 'replace':
         existing_table.inc(**inc).delete()
-        res.to_sql(name = table, con = engine, schema = schema, chunksize = chunksize, 
+        res.to_sql(name = table, con = con, schema = schema, chunksize = chunksize, 
                    if_exists = 'append', index = True if index else False, index_label = index)
         return rtn
     if len(idx) == 0:
@@ -2897,7 +2930,7 @@ def pd_to_sql(df, table = None, db = None, server = None, schema = None, index =
     else:
         raise ValueError(f'unknown method: {method}. method needs to be append/insert/replace/update or a callable function')            
     if len(existing) == 0:
-        res.to_sql(name = table, con = engine, schema = schema, chunksize = chunksize, 
+        res.to_sql(name = table, con = con, schema = schema, chunksize = chunksize, 
                    if_exists = 'append', index = True, index_label = index)
         return rtn
     duplicates = sorted(set(res.index) & set(existing.index))
@@ -2921,13 +2954,13 @@ def pd_to_sql(df, table = None, db = None, server = None, schema = None, index =
         to_delete = dictable(duplicates, idx)
         existing_table.delete(to_delete, **inc)
     if len(res) > 0:
-        res.to_sql(name = table, con = engine, schema = schema, chunksize = chunksize, 
+        res.to_sql(name = table, con = con, schema = schema, chunksize = chunksize, 
                    if_exists = 'append', index = True, index_label = index)
     return rtn
 
 
 
-def pd_read_sql(table = None, db = None, server = None, schema = None,
+def pd_read_sql(table = None, db = None, server = None, schema = None, engine = None, session = None,
                 inc = None, columns = None, index = None, coerce_float : bool = True, duplicate = None, sort = None, **more_inc):
     """
     a thin wrapper around sql_cursor.to_sql()
@@ -2940,7 +2973,7 @@ def pd_read_sql(table = None, db = None, server = None, schema = None,
     all the other parameters: see sql_cursor.read_sql
     
     """
-    cursor = sql_table(table = table, db = db, server = server, schema = schema)
+    cursor = sql_table(table = table, db = db, server = server, schema = schema, engine = engine, session = session)
     return cursor.read_sql(inc = inc, index = index, columns = columns, coerce_float = coerce_float,
                            duplicate = duplicate, sort = sort, **more_inc)
     

@@ -1,6 +1,8 @@
-from pyg_sql import sql_table, sql_cursor, get_engine, create_schema
+from pyg_sql import sql_table, sql_cursor, get_engine, create_schema, sql_has_table
 from pyg import * 
 import sqlalchemy as sa
+from sqlalchemy.orm import Session
+from sqlalchemy.engine.base import Engine
 import pytest
 from functools import partial
 from pyg_base import *
@@ -17,7 +19,7 @@ def drop_table(table, schema = None, db = None, server = None):
     except Exception:
         pass
 
-get_engine(db = 'test_db', schema = 'dbo', create = True)
+e = get_engine(db = 'test_db', schema = 'dbo', create = True)
 
 def test_create_parameters():
     with pytest.raises(ValueError):
@@ -120,3 +122,28 @@ def test_saving_binary_works():
     assert table.item == ['a', 'b']
     table.drop()
 
+
+def test_getting_engine_from_session():
+    session = Session(e)
+    assert isinstance(get_engine(session = session), Engine)
+
+def test_creating_tables_with_session_rather_than_engine():
+    table = 'test_creating_tables_with_session_rather_than_engine'
+    table = 'this_table'
+    t = sql_table(db = 'test_db', schema = 'dbo', table = table, pk = 'item', nullable = ['a', 'b'], doc = False)
+    t = t.delete()
+    assert len(t) == 0
+    assert t.session is None
+    assert t.connect() is not None
+    session = t.connect()
+    print(session)
+    with Session(e) as session:
+        tbl = sql_table(db = 'test_db', schema = 'dbo', table = table, pk = 'item', nullable = ['a', 'b'], doc = False, session = session, dry_run = True)
+        tbl.insert_one(dict(a = 'a', b = 'b', item = 'item'))
+        session.rollback()
+    assert len(t) == 0
+    with Session(e) as session:
+        tbl = sql_table(db = 'test_db', schema = 'dbo', table = table, pk = 'item', nullable = ['a', 'b'], doc = False, session = session, dry_run = True)
+        tbl.insert_one(dict(a = 'a', b = 'b', item = 'item'))
+        session.commit()
+    assert len(t) == 1

@@ -1,13 +1,10 @@
 from pyg_sql import sql_table, sql_cursor, get_engine, create_schema, sql_has_table
-from pyg import * 
+from pyg import eq, dictable, Dict, passthru, sql_binary_store, decode, encode, dictable_decode, db_cell
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 from sqlalchemy.engine.base import Engine
 import pytest
 from functools import partial
-from pyg_base import *
-from pyg_encoders import * 
-from pyg_sql import * 
 server = db = schema = None
 import pandas as pd
 import pickle
@@ -21,16 +18,17 @@ def drop_table(table, schema = None, db = None, server = None):
 
 e = get_engine(db = 'test_db', schema = 'dbo', create = True)
 
-def test_create_parameters():
+def test_create_parameters():   
     with pytest.raises(ValueError):
-        t = sql_table('test_table', db = 'should_fail_we_did_not_mandate', nullable= dict(a=int, b=str))
+        sql_table('test_table', db = 'should_fail_we_did_not_mandate', nullable= dict(a=int, b=str))
     with pytest.raises(ValueError):
         get_engine(db = 'should_fail_we_did_not_mandate', schema = 'dbo')
     
 
 def test_sql_table_base():
-    drop_table('test_table', db = 'test_db')
-    t = sql_table('test_table', db = 'test_db', nullable= dict(a=int, b=str))
+    table = 'test_sql_table_base'
+    drop_table(table, db = 'test_db')
+    t = sql_table(table, db = 'test_db', nullable= dict(a=int, b=str))
     assert len(t) == 0
     t = t.insert(dict(a=1, b='a'))
     assert len(t) == 1
@@ -42,7 +40,8 @@ def test_sql_table_base():
 
 
 def test_doc_store_save_and_read_dictable():
-    db = partial(sql_table, table = 'test_table', db = 'test_db', schema = 'test', pk = 'key', doc = True)
+    table = 'test_doc_store_save_and_read_dictable'
+    db = partial(sql_table, table = table, db = 'test_db', schema = 'test', pk = 'key', doc = True)
     t = db()   
     t = t.delete()
     doc = Dict(function = passthru, data = dictable(a = [1,2,3], b = 'b'), key = 'dictable', db = db)
@@ -172,5 +171,12 @@ def test_running_with_no_context():
     assert len(t) == 1
     t.drop(True)
     
+def test_encoding_cells_with_connections():
+    table = 'test_encoding_cells_with_connections'
+    t = sql_table(db = 'test_db', schema = 'dbo', table = table, pk = 'item', nullable = ['a', 'b'], doc = False)
+    db = 'test_db'; schema = 'dbo'; doc = False    
+    session = Session(e)    
+    dbt = partial(sql_table, db = db, schema = schema, doc = doc, session = session)
+    encode(dbt)
     
 

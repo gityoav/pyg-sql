@@ -468,6 +468,37 @@ def _get_engine(*pairs, **connection):
     return e
 
 
+
+def get_session(db, server = None, engine = None, session = None, session_maker = None):
+    """
+    returns an ORM session
+
+    Parameters
+    ----------
+    db : str
+        database name.
+    server : str
+        server name.
+    engine : a sql session object, optional
+        A SQL engine. The default is None.
+    session : ORM-like session, optional
+        An existing session. The default is None.
+
+    session_maker: a function/class that creates a session
+        if None defaults sqlalchemy Session
+
+    Returns
+    -------
+    Session
+
+    """
+    if session is not None:
+        return session
+    e = _get_engine(server = server, db = db, engine = engine)
+    session_maker = session_maker or Session
+    return session_maker(e)
+
+
 def get_engine(*pairs, **connection):
     """
     returns a sqlalchemy engine object

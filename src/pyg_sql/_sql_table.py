@@ -438,7 +438,7 @@ def _create_engine(cstr):
 
 def _get_engine(*pairs, **connection):  
     connection = _pairs2connection(*pairs, **connection)
-    server = get_server(connection.pop('server', None))
+    server = connection.pop('server', None)
     if isinstance(server, Engine):
         return server
     elif isinstance(server, Session):
@@ -452,6 +452,7 @@ def _get_engine(*pairs, **connection):
     connection['driver'] = get_driver(connection.pop('driver', None))
     create = connection.pop('create', False)
     db = _db(connection)    
+    server = get_server(server)
     cstr = get_cstr(server=server, db = db, **connection)    
     if callable(engine): # delegates connection to another function
         e = Dict(server = server, db = db, environment = server, connection = cstr).apply(engine)

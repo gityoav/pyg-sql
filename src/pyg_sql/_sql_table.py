@@ -1061,7 +1061,7 @@ class sql_cursor(object):
         
     internal context run:
         t = sql_table(...)
-        with t.context(dry_run = True): ## session is still none, but dry_run must be set
+        with t.connect(dry_run = True): ## session is still none, but dry_run must be set
             assert t.session is None
             t.insert_one() ## do not commit yet
             t.insert_one() ## do not commit yet
@@ -1173,11 +1173,11 @@ class sql_cursor(object):
         return type(self)(self, **kwargs)
 
     
-    def context(self, dry_run = True, session = None):
+    def connect(self, dry_run = False, session = None):
         return self.copy(dry_run = dry_run, session = session)
 
         
-    def connect(self, session = None):
+    def connection(self, session = None):
         """
         Creates a valid session and attach it to the cursor
         
@@ -1270,7 +1270,7 @@ class sql_cursor(object):
             
 
         """
-        session = self.connect()
+        session = self.connection()
         try:
             res = session.execute(statement, *args, **kwargs)
             if transform:
@@ -1291,7 +1291,7 @@ class sql_cursor(object):
         return res
     
     def commit(self):
-        session = self.connect()
+        session = self.connection()
         if self.dry_run:
             session.rollback()
         else:
@@ -1299,7 +1299,7 @@ class sql_cursor(object):
         return self
 
     def rollback(self):
-        session = self.connect()
+        session = self.connection()
         session.rollback()
         return self
         
@@ -1316,7 +1316,7 @@ class sql_cursor(object):
         """
         if self.dry_run is None:
             self.dry_run = True
-        self.connect().__enter__()
+        self.connection().__enter__()
         return self
 
 
@@ -1332,7 +1332,7 @@ class sql_cursor(object):
             
         """
         self.commit()
-        self.connect().__exit__(type, value, traceback)
+        self.connection().__exit__(type, value, traceback)
         self.dry_run = None
         return self
         
@@ -2292,7 +2292,7 @@ class sql_cursor(object):
         if is_strs(keys):
             keys = self._col(keys)
             keys = [self.table.columns[k] for k in keys]
-        query = self.connect().query(*keys)
+        query = self.connection().query(*keys)
         if self.spec is not None:
             query = query.where(self.spec)        
         res = query.distinct().all()

@@ -451,7 +451,9 @@ def _get_engine(*pairs, **connection):
         return engine
     connection['driver'] = get_driver(connection.pop('driver', None))
     create = connection.pop('create', False)
-    db = _db(connection)    
+    db = _db(connection)
+    if (server, db) in SESSIONS:
+        return SESSIONS[(server, db)].get_bind()
     server = get_server(server)
     cstr = get_cstr(server=server, db = db, **connection)    
     if callable(engine): # delegates connection to another function
@@ -493,8 +495,13 @@ def get_session(db, server = None, engine = None, session = None, session_maker 
     Session
 
     """
+    address = (server, db)
     if session is not None:
+        if address not in SESSIONS:
+            SESSIONS[address] = session
         return session
+    elif address in SESSIONS:
+        return SESSIONS[address]
     e = _get_engine(server = server, db = db, engine = engine)
     session_maker = session_maker or Session
     return session_maker(e)

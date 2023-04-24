@@ -1168,6 +1168,11 @@ class sql_cursor(object):
         self.defaults = defaults
         self.doc = doc
         self.dry_run = dry_run ## indicating we are within a transaction, please keep the same session
+        if session is not None:
+            address = (self.server, self.db)
+            if address not in SESSIONS:
+                SESSIONS[address] = session
+
     
     def copy(self, **kwargs):
         return type(self)(self, **kwargs)
@@ -1189,6 +1194,9 @@ class sql_cursor(object):
         """
         if session is not None:
             self.session = session
+            address = (self.server, self.db)
+            if address not in SESSIONS:
+                SESSIONS[address] = session
         if self.session is None:
             address = (self.server, self.db)        
             if address not in SESSIONS:

@@ -457,7 +457,9 @@ def _get_engine(*pairs, **connection):
         return engine
     connection['driver'] = get_driver(connection.pop('driver', None))
     create = connection.pop('create', False)
-    db = _db(connection)    
+    db = _db(connection)
+    if (server, db) in SESSIONS:
+        return SESSIONS[(server, db)].get_bind()
     server = get_server(server)
     cstr = get_cstr(server=server, db = db, **connection)    
     if callable(engine): # delegates connection to another function
@@ -499,8 +501,13 @@ def get_session(db, server = None, engine = None, session = None, session_maker 
     Session
 
     """
+    address = (server, db)
     if session is not None:
+        if address not in SESSIONS:
+            SESSIONS[address] = session
         return session
+    elif address in SESSIONS:
+        return SESSIONS[address]
     e = _get_engine(server = server, db = db, engine = engine)
     session_maker = session_maker or Session
     return session_maker(e)
@@ -1067,7 +1074,7 @@ class sql_cursor(object):
         
     internal context run:
         t = sql_table(...)
-        with t.context(dry_run = True): ## session is still none, but dry_run must be set
+        with t.connect(dry_run = True): ## session is still none, but dry_run must be set
             assert t.session is None
             t.insert_one() ## do not commit yet
             t.insert_one() ## do not commit yet
@@ -1174,16 +1181,21 @@ class sql_cursor(object):
         self.defaults = defaults
         self.doc = doc
         self.dry_run = dry_run ## indicating we are within a transaction, please keep the same session
+        if session is not None:
+            address = (self.server, self.db)
+            if address not in SESSIONS:
+                SESSIONS[address] = session
+
     
     def copy(self, **kwargs):
         return type(self)(self, **kwargs)
 
     
-    def context(self, dry_run = True, session = None):
+    def connect(self, dry_run = False, session = None):
         return self.copy(dry_run = dry_run, session = session)
 
         
-    def connect(self, session = None):
+    def connection(self, session = None):
         """
         Creates a valid session and attach it to the cursor
         
@@ -1195,6 +1207,9 @@ class sql_cursor(object):
         """
         if session is not None:
             self.session = session
+            address = (self.server, self.db)
+            if address not in SESSIONS:
+                SESSIONS[address] = session
         if self.session is None:
             address = (self.server, self.db)        
             if address not in SESSIONS:
@@ -1280,7 +1295,7 @@ class sql_cursor(object):
             
 
         """
-        session = self.connect()
+        session = self.connection()
         try:
             res = session.execute(statement, *args, **kwargs)
             if transform:
@@ -1301,7 +1316,7 @@ class sql_cursor(object):
         return res
     
     def commit(self):
-        session = self.connect()
+        session = self.connection()
         if self.dry_run:
             session.rollback()
         else:
@@ -1309,7 +1324,7 @@ class sql_cursor(object):
         return self
 
     def rollback(self):
-        session = self.connect()
+        session = self.connection()
         session.rollback()
         return self
         
@@ -1326,7 +1341,7 @@ class sql_cursor(object):
         """
         if self.dry_run is None:
             self.dry_run = True
-        self.connect().__enter__()
+        self.connection().__enter__()
         return self
 
 
@@ -1342,7 +1357,7 @@ class sql_cursor(object):
             
         """
         self.commit()
-        self.connect().__exit__(type, value, traceback)
+        self.connection().__exit__(type, value, traceback)
         self.dry_run = None
         return self
         
@@ -2310,7 +2325,7 @@ class sql_cursor(object):
         if is_strs(keys):
             keys = self._col(keys)
             keys = [self.table.columns[k] for k in keys]
-        query = self.connect().query(*keys)
+        query = self.connection().query(*keys)
         if self.spec is not None:
             query = query.where(self.spec)        
         res = query.distinct().all()

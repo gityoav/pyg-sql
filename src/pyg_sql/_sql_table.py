@@ -1,7 +1,7 @@
 import sqlalchemy as sa
 from sqlalchemy_utils.functions import create_database
 from pyg_base import cache, cfg_read, as_list, dictable, lower, loop, replace, Dict, is_dict, is_dictable, is_strs, is_str, is_int, is_date, dt2str, ulist, try_back, unique, is_primitive
-from pyg_encoders import as_reader, as_writer, dumps, loads, encode
+from pyg_encoders import as_reader, as_writer, dumps, loads, encode, executor_pool
 from sqlalchemy import Table, Column, Integer, String, MetaData, Identity, Float, DATE, DATETIME, TIME, select, func, not_, desc, asc
 from sqlalchemy.orm import Session
 from sqlalchemy.engine.base import Engine
@@ -56,6 +56,13 @@ _type_codes = {String : 's', Integer : 'i', Float : 'f', Boolean: 'b', sa.BigInt
 
 ## This is what is used for keys that are strings and are part of the primary keys to ensure they can be indexed
 _pk_types = _types | {str : NVARCHAR, 'str' : NVARCHAR} 
+
+
+def _table_execute(table, statement, transform = None, args = None, kwargs = None):
+    args = args or ()
+    kwargs = kwargs or {}
+    table.execute(statement, *args, transform = transform, **kwargs)
+
 
 
 def _as_type(t, types):
@@ -275,7 +282,6 @@ class sql_df():
         
 
 
-@cache
 def _servers():
     res = cfg_read().get('sql_server', {})
     if isinstance(res, dict):
@@ -1244,6 +1250,10 @@ class sql_cursor(object):
         return sa.Index(name, *columns, unique = unique).create(self.engine)
 
     
+    def pooled_execute(self, statement, *args, transform = None, max_workers = 4, pool_name = None, **kwargs):
+        pool = executor_pool(max_workers, pool_name)
+        pool.submit(_table_execute, self, statement, transform, args, kwargs)
+
     def execute(self, statement, *args, transform = None, **kwargs):
         """
         executes a statement in two modes:
@@ -1694,7 +1704,7 @@ class sql_cursor(object):
         res.update(found)
         return res
                 
-    def insert_one(self, doc, ignore_bad_keys = False, write = True):
+    def insert_one(self, doc, ignore_bad_keys = False, write = True, max_workers = 4, pool_name = None):
         """
         insert a single document to the table
 
@@ -1726,9 +1736,11 @@ class sql_cursor(object):
             if len(tbl):           
                 tbl.full_delete()
         if len(tbl) == 0: ## no existing documents
-            self.execute(self.table.insert(),[res_no_ids])
             if ids:
-                doc.update(tbl[0][ids])                
+                self.execute(self.table.insert(),[res_no_ids])
+                doc.update(tbl[0][ids])
+            else:
+                self.pooled_execute(self.table.insert(),[res_no_ids])
         else: ## should only happen to non-archiving table
             read = tbl.sort(ids)._read_statement() ## raw format
             read['data'] = read['data'][-1:] ## just the last document
@@ -1737,10 +1749,10 @@ class sql_cursor(object):
             latest = docs[-1]
             tbl.exc(**tbl._id(latest)).full_delete()
             latest = Dict(latest)
-            self.inc(self._id(latest)).update(**(res_no_ids))
+            self.inc(self._id(latest)).update(max_workers = max_workers, pool_name = pool_name, **(res_no_ids))
             doc.update(latest[ids])
             latest[_deleted] = datetime.datetime.now()
-            self.archived().insert_one(latest)
+            self.archived().insert_one(latest, max_workers = max_workers, pool_name = pool_name)
         return doc
     
     
@@ -1980,7 +1992,7 @@ class sql_cursor(object):
         elif is_int(value):
             return self.read(value)
     
-    def update_one(self, doc, upsert = True):
+    def update_one(self, doc, upsert = True, max_workers = 4, pool_name = None):
         """
         Similar to insert, except will throw an error if upsert = False and an existing document is not there
         """
@@ -1992,9 +2004,9 @@ class sql_cursor(object):
             if upsert is False:
                 raise ValueError(f'no documents found to update {doc}')
             else:
-                return self.insert_one(doc)
+                return self.insert_one(doc, max_workers = max_workers, pool_name = pool_name)
         elif self._pk:
-            return self.insert_one(doc)
+            return self.insert_one(doc, max_workers = max_workers, pool_name = pool_name)
         elif n == 1:
             doc = _relabel(doc, self.columns, strict = False)
             edoc = self._dock(doc)
@@ -2003,15 +2015,15 @@ class sql_cursor(object):
             for i in ids:
                 if i in wdoc:
                     del wdoc[i]
-            existing.update(**wdoc)
-            res = existing[0]
+            existing.update(max_workers = 0, **wdoc) ## we need to wait to see value
+            res = existing[0] 
             res.update(edoc)
             return self._undock(res)
         elif n > 1:
             raise ValueError(f'multiple documents found matching {doc}')
                 
             
-    def insert_many(self, docs, write = True):
+    def insert_many(self, docs, write = True, max_workers = 4, pool_name = None):
         """
         insert multiple docs. 
 
@@ -2025,7 +2037,7 @@ class sql_cursor(object):
         rs = _relabel(rs, self.columns, strict = False)
         if len(rs) > 0:
             if self._pk and not self._is_archived():
-                _ = [self.insert_one(doc, write = write) for doc in rs]
+                _ = [self.insert_one(doc, write = write, max_workers = max_workers, pool_name = pool_name) for doc in rs]
             else:
                 columns = self.columns - self._ids
                 if write:
@@ -2033,7 +2045,7 @@ class sql_cursor(object):
                     rows = [self._write_doc(row, columns = columns) for row in rows]
                 else:
                     rows = list(rs)
-                self.execute(self.table.insert(), rows)
+                self.pooled_execute(self.table.insert(), rows, max_workers = max_workers, pool_name = pool_name)
         return self
 
     def __iter__(self):
@@ -2168,19 +2180,23 @@ class sql_cursor(object):
             statement = statement.order_by(*order_by)
         return statement
     
-    def update(self, **kwargs):
+    def update(self, max_workers = 0, pool_name = None, **kwargs):
         if len(kwargs) == 0:
             return self
         statement = self.table.update()
         if self.spec is not None:
             statement = statement.where(self.spec)
         statement = statement.values(kwargs)
-        self.execute(statement)
-        return self
+        if max_workers:
+            self.pooled_execute(self, statement, max_workers = max_workers, pool_name = pool_name)
+            return self
+        else:
+            self.execute(statement)
+            return self
     
     set = update
 
-    def full_delete(self):
+    def full_delete(self, max_workers = 0, pool_name = None):
         """
         A standard delete will actually auto-archive a table with primary keys. # i.e. we have full audit
         .full_delete() will drop the currently selected records without archiving them first
@@ -2189,10 +2205,12 @@ class sql_cursor(object):
         statement = self.table.delete()
         if self.spec is not None:
             statement = statement.where(self.spec)
-        self.execute(statement)
-        return self
-
-
+        if max_workers:
+            self.pooled_execute(self, statement, max_workers = max_workers, pool_name = pool_name)
+        else:
+            self.execute(statement)
+            return self
+        
 
     def delete(self, *df, **inc):
         """

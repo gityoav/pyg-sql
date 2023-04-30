@@ -21,6 +21,7 @@ _id = '_id'
 _doc = 'doc'
 _root = 'root'
 _deleted = 'deleted'
+_archived = 'archived_'
 _pd_is_old = pd.__version__.startswith('0')
 _index = 'index'
 
@@ -57,36 +58,10 @@ _type_codes = {String : 's', Integer : 'i', Float : 'f', Boolean: 'b', sa.BigInt
 _pk_types = _types | {str : NVARCHAR, 'str' : NVARCHAR} 
 
 
-def session_execute(session, statement, args = None, kwargs = None, commit = False):
-    """
-    This allows multiple statements to be executed at once
-    """
-    if args is None:
-        args = ()
-    if kwargs is None:
-        kwargs = {}
-    if isinstance(statement, list):
-        res = []
-        n = len(statement)
-        assert len(args) == 0 or len(args) == n
-        assert len(kwargs) == 0 or len(kwargs) == n
-        for i in range(n):
-            statement_ = statement[i]
-            args_ = args[i] if len(args) else ()
-            kwargs_ = kwargs[i] if len(kwargs) else {}
-            if args_ is None:
-                args_ = ()
-            if kwargs_ is None:
-                kwargs_ = {}
-            res_ = session.execute(statement_, *args_, **kwargs_)
-            res.append(res_)
-    else:    
-        res = session.execute(statement, *args, **kwargs)
-    if commit:
-        session.commit()
-    return res
-
-
+def _table_execute(table, statement, transform = None, args = None, kwargs = None):
+    args = args or ()
+    kwargs = kwargs or {}
+    table.execute(statement, *args, transform = transform, **kwargs)
 
 
 
@@ -503,7 +478,7 @@ def _get_engine(*pairs, **connection):
 
 
 
-def get_session(db, server = None, engine = None, session = None, session_maker = None, **session_kwargs):
+def get_session(db, server = None, engine = None, session = None, session_maker = None):
     """
     returns an ORM session
 
@@ -535,7 +510,7 @@ def get_session(db, server = None, engine = None, session = None, session_maker 
         return SESSIONS[address]
     e = _get_engine(server = server, db = db, engine = engine)
     session_maker = session_maker or Session
-    return session_maker(e, **session_kwargs)
+    return session_maker(e)
 
 
 def get_engine(*pairs, **connection):
@@ -564,7 +539,7 @@ def sql_has_table(table_name, schema, db, server, engine = None, session = None)
 def sql_table(table, db = None, non_null = None, nullable = None, _id = None, schema = None, 
               server = None, reader = None, writer = None, pk = None, doc = None, mode = None, 
               spec = None, selection = None, order = None, defaults = None, joint = None, create = None, 
-              engine = None, session = None, dry_run = None):
+              engine = None, session = None, dry_run = None, archive_schema = None, archive_writer = None):
     """
     Creates a sql table. Can also be used to simply read table from the db
     Parameters
@@ -665,6 +640,8 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         engine = table.keywords.get('engine') if engine is None else engine
         session = table.keywords.get('session') if session is None else session
         dry_run = table.keywords.get('dry_run') if dry_run is None else dry_run
+        archive_schema = table.keywords.get('archive_schema') if archive_schema is None else archive_schema
+        archive_writer = table.keywords.get('archive_writer') if archive_writer is None else archive_writer
         doc = table.keywords.get('doc') if doc is None else doc
         pk = table.keywords.get('pk') if pk is None else pk
         table = table.keywords['table']
@@ -678,6 +655,8 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         schema = table.schema if schema is None else schema
         server = table.server if server is None else server
         writer = table.writer if writer is None else writer
+        archive_schema = table.archive_schema if archive_schema is None else archive_schema
+        archive_writer = table.archive_writer if archive_writer is None else archive_writer
         dry_run = table.dry_run if dry_run is None else dry_run
         doc = table.doc if doc is None else doc
         pk = table.pk if pk is None else pk
@@ -771,7 +750,8 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
     res = sql_cursor(table = tbl, schema = schema, db = db, server = server, engine = e, session = session, dry_run = dry_run,
                      reader = reader, writer = writer, defaults = defaults,
                      pk = list(pk) if isinstance(pk, dict) else pk, doc = doc,
-                     spec = spec, selection = selection, order = order, joint = joint)
+                     spec = spec, selection = selection, order = order, joint = joint, 
+                     archive_writer = archive_writer, archive_schema = archive_schema)
     return res
         
 
@@ -786,7 +766,7 @@ class sql_cursor(object):
     pyg-sql creates sql_cursor, a thin wrapper on sql-alchemy (sa.Table), providing three different functionailities:
 
     - simplified create/filter/sort/access of a sql table
-    - maintainance of a table where records are unique per specified primary keys
+    - maintainance of a table where records are unique per specified primary keys while we auto-archive old data
     - creation of a full no-sql like document-store
 
     pyg-sql supports simple joins but not much more than that.
@@ -981,11 +961,13 @@ class sql_cursor(object):
      'age': None,
      'grade': None}
 
-    ## primary keys 
+    ## primary keys and auto-archive
     
     Primary Keys are applied if the primary keys (pk) are specified. 
     Now, when we insert into a table, if another record with same pk exists, the record will be replaced.
-    
+    Rather than simply delete old records, we create automatically a parallel deleted_database.table to auto-archive these replaced records.
+    This ensure a full audit and roll-back of records is possible.
+
     :Example: primary keys and deleted records
     ------------------------------------------
     The table as set up can have multiple items so:
@@ -1009,6 +991,17 @@ class sql_cursor(object):
     >>> assert len(t) == 1 
     >>> assert t[0].age == 48
 
+    Where did the data go to? We automatically archive the deleted old records for dict(name = 'yoav', surname = 'git') here:
+
+    >>> t.archived() 
+    
+    t.archived() is a table by same name,
+    
+    - exists on deleted_test database, 
+    - same table structure with added 'deleted' column
+    
+    >>> assert len(t.archived().inc(name = 'yoav', age = 46)) > 0
+    >>> t.archived().delete() 
 
     ## sql_cursor as a document store
 
@@ -1107,7 +1100,7 @@ class sql_cursor(object):
     
     def __init__(self, table, schema = None, db = None, engine = None, server = None, session = None, dry_run = None,
                  spec = None, selection = None, order = None, joint = None, reader = None, writer = None,
-                 pk = None, defaults = None, doc = None, **_):
+                 pk = None, defaults = None, doc = None, archive_schema = None, archive_writer = None, **_):
         """
         Parameters
         ----------
@@ -1137,13 +1130,18 @@ class sql_cursor(object):
             This is only relevant to document store and specifies how documents that contain complicated objects are transformed. e.g. Use writer = 'c:/%key1/%key2.parquet' to specify documents saved to parquet based on document keys        
         doc: bool
             Specifies if to create the table as a document store
+        archive_schema: str
+            schema where the archive table is saved
+        archive_writer: str
+            location where archived documents are to be saved
         """
         if is_str(table):
             ### you shouldn't really construct the table using sql_cursor, sql_table should be the entry point.
             table = sql_table(table = table, schema = schema, db = db, server = server, 
                               engine = engine, session = session, dry_run = dry_run,
                               pk = pk, doc = doc, 
-                              reader = reader, writer = writer)
+                              reader = reader, writer = writer, 
+                              archive_schema = archive_schema, archive_writer = archive_writer)
             
         if isinstance(table, sql_cursor):
             db = table.db if db is None else db
@@ -1161,6 +1159,8 @@ class sql_cursor(object):
             pk = table.pk if pk is None else pk
             doc = table.doc if doc is None else doc
             defaults = table.defaults if defaults is None else defaults
+            archive_schema = table.archive_schema if archive_schema is None else archive_schema
+            archive_writer = table.archive_writer if archive_writer is None else archive_writer
             table = table.table
     
         self.table = table
@@ -1175,6 +1175,8 @@ class sql_cursor(object):
         self.joint = joint
         self.reader = reader
         self.writer = writer
+        self.archive_schema = archive_schema
+        self.archive_writer = archive_writer
         self.pk = pk
         self.defaults = defaults
         self.doc = doc
@@ -1263,43 +1265,52 @@ class sql_cursor(object):
         return sa.Index(name, *columns, unique = unique).create(self.engine)
 
     
-    def pooled_execute(self, statement, args = None, kwargs = None, max_workers = 0, pool_name = None, transform = None):
-        if max_workers == 0:
-            return self.execute(statement, args = args, kwargs = kwargs, transform = transform)
-        session = self.connection()
-        pool_name = pool_name or (self.server, self.db) ## a pool per session
+    def pooled_execute(self, statement, *args, transform = None, max_workers = 4, pool_name = None, **kwargs):
         pool = executor_pool(max_workers, pool_name)
-        commit = self.session is None and self.dry_run is None
-        pool.submit(session_execute, session = session, statement = statement, args = args, kwargs = kwargs, commit = commit)
-        return 
+        pool.submit(_table_execute, self, statement, transform, args, kwargs)
 
-
-    def execute(self, statement, args = None, kwargs = None, transform = None):
+    def execute(self, statement, *args, transform = None, **kwargs):
         """
         executes a statement in two modes:
-            if self.session exists or self.dry_run is set, we assume we are within a transaction and will simply execute using connection
-            if both are None, we "lock-and-load", committing after every execution statement(s)  
+            if a self.session exists, it assumes we are within a transaction and will simply execute using connection
+            if self.session is None, it assumes we basically want to lock and load... will execute and commit
 
         Parameters
         ----------
-        statement : single or multiple sql statements
-        args/kwargs: parameters for the execution statement
-        transform: if you want the result of the statement to be transformed
+        statement : sql statement
+        
+        Example: committed 
+        --------            
+        Example: a simple transactional logic
+        --------
+        with cursor:
+            cursor.execute(statement) ## not committed
+            cursor.execute(another_statement)
+
+        Example: a simple transactional logic for rolling back
+        --------
+        with cursor.connect(True):
+            cursor.execute(statement)
+            cursor.execute(another_statement)
+            
 
         """
         session = self.connection()
-        commit = self.session is None and self.dry_run is None
         try:
-            res = session_execute(session, statement = statement, args = args, kwargs = kwargs, commit = commit)
+            res = session.execute(statement, *args, **kwargs)
             if transform:
                 res = transform(res)
+            if self.session is None and self.dry_run is None:
+                session.commit()
         except (sa.exc.PendingRollbackError, sa.exc.DisconnectionError, sa.exc.InvalidatePoolError) as e: ## if session has expired, we reconnect
             if self.session is None:        
                 address = (self.server, self.db)            
                 session = SESSIONS[address] = self.session_maker(self.engine) # invalidate the session and create a new one
-                res = session_execute(session, statement = statement, args = args, kwargs = kwargs, commit = commit)
+                res = session.execute(statement, *args, **kwargs)
                 if transform:
                     res = transform(res)
+                if self.session is None and self.dry_run is None:
+                    session.commit()
             else:
                 raise e
         return res
@@ -1328,8 +1339,8 @@ class sql_cursor(object):
             t.delete()
             
         """
-        if self.dry_run is None: 
-            self.dry_run = {} 
+        if self.dry_run is None:
+            self.dry_run = True
         self.connection().__enter__()
         return self
 
@@ -1347,8 +1358,7 @@ class sql_cursor(object):
         """
         self.commit()
         self.connection().__exit__(type, value, traceback)
-        if self.dry_run == {}: 
-            self.dry_run = None
+        self.dry_run = None
         return self
         
 
@@ -1377,6 +1387,9 @@ class sql_cursor(object):
         ids = {i : doc[i] for i in self._ids if i in doc}
         if len(ids):
             return ids
+        keys = {i: doc[i] for i in doc if isinstance(doc[i], (int, str, datetime.datetime))}
+        if len(keys):
+            return keys
         return {}
 
     @property
@@ -1553,9 +1566,11 @@ class sql_cursor(object):
             selection = [col for col in selection if col.name not in other]
             return self.select(selection)
             
-    def drop(self):
+    def drop(self, deleted = False):
         if self.selection or self.spec:
             raise ValueError('To avoid confusing .delete and .drop, dropping a table can only be done if there is no selection and no filtering')
+        if deleted and self._pk:
+            self.archived().drop()
         logger.info('dropping table: %s.%s.%s'%(_database(self.db), 
                                                   self.schema, 
                                                   self.table.name))
@@ -1642,10 +1657,10 @@ class sql_cursor(object):
     
     
     def __len__(self):
-        if self.spec is None:
-            return self.connection().query(self.table).count()
-        else:
-            return self.connection().query(self.table).where(self.spec).count()
+        statement = select(func.count()).select_from(self._table)
+        if self.spec is not None:
+            statement = statement.where(self.spec)
+        return self.execute(statement, transform = list)[0][0]
     
     count = __len__
 
@@ -1703,32 +1718,8 @@ class sql_cursor(object):
             raise ValueError(f'got multiple possible values for each of these columns: {conflicted}')
         res.update(found)
         return res
-    
-    
-    def _insert_one_statement(self, doc, ids, ignore_bad_keys = False, write = True):
-        if self.defaults:
-            doc.update({k : v for k,v in self.defaults.items() if k not in doc})
-        doc = _relabel(res = doc, selection = self.columns, strict = False) ## we want to replace what is possible
-        edoc = self._dock(doc) if write else doc
-        columns = self.columns - ids
-        if not ignore_bad_keys:
-            bad_keys = {key: value for key, value in edoc.items() if key not in columns}
-            if len(bad_keys) > 0:
-                raise ValueError(f'cannot insert into db a document with these keys: {bad_keys}. The table only has these keys: {columns}')        
-        doc_id = self._id(edoc)
-        res = self._write_doc(edoc, columns = columns) if write else edoc
-        res_no_ids = type(res)({k : v for k, v in res.items() if k not in ids}) if ids else res
                 
-        tbl, statement, args = None, self.table.insert(), ([res_no_ids],)
-        if doc_id: ## there may be documents to remove first        
-            tbl = self.inc().inc(**doc_id)
-            if len(tbl):
-                delete_statement = tbl._delete_statement()                
-                statement, args = [delete_statement, self.table.insert()], [(), ([res_no_ids],)]
-        return tbl, statement, args
-
-        
-    def insert_one(self, doc, ignore_bad_keys = False, write = True, max_workers = 0, pool_name = None):
+    def insert_one(self, doc, ignore_bad_keys = False, write = True, max_workers = 4, pool_name = None):
         """
         insert a single document to the table
 
@@ -1740,19 +1731,43 @@ class sql_cursor(object):
             Suppose you have a document with EXTRA keys. Rather than filter the document, set ignore_bad_keys = True and we will drop irrelevant keys for you
 
         """
+        if self.defaults:
+            doc.update({k : v for k,v in self.defaults.items() if k not in doc})
+        doc = _relabel(res = doc, selection = self.columns, strict = False) ## we want to replace what is possible
+        edoc = self._dock(doc) if write else doc
         ids = self._ids
-        tbl, statement, args = self._insert_one_statement(doc = doc, ids = ids, ignore_bad_keys = ignore_bad_keys, write = write)
-        if ids and self._pk: ## there are auto-generated ids and a unique primary keys
-            self.execute(statement, args)
-            ## now we grab ids
-            if len(tbl):
-                read = tbl.sort(ids)._read_statement() ## raw format
-                read['data'] = read['data'][-1:] ## just the last document
-                docs = tbl._rows_to_docs(**read, reader = False) ## do not transform the document, keep in raw format?
-                latest = Dict(docs[-1])
-                doc.update(latest[ids])
-        else:
-            self.pooled_execute(statement, args)
+        columns = self.columns - ids
+        if not ignore_bad_keys:
+            bad_keys = {key: value for key, value in edoc.items() if key not in columns}
+            if len(bad_keys) > 0:
+                raise ValueError(f'cannot insert into db a document with these keys: {bad_keys}. The table only has these keys: {columns}')        
+        doc_id = self._id(edoc)
+        res = self._write_doc(edoc, columns = columns) if write else edoc
+        res_no_ids = type(res)({k : v for k, v in res.items() if k not in ids}) if ids else res
+        tbl = self.inc().inc(**doc_id)
+        if ((not self._pk) or self._is_archived()):
+            if _deleted not in res:
+                res_no_ids[_deleted] = res[_deleted] = datetime.datetime.now()
+            if len(tbl):           
+                tbl.full_delete()
+        if len(tbl) == 0: ## no existing documents
+            if ids:
+                self.execute(self.table.insert(),[res_no_ids])
+                doc.update(tbl[0][ids])
+            else:
+                self.pooled_execute(self.table.insert(),[res_no_ids])
+        else: ## should only happen to non-archiving table
+            read = tbl.sort(ids)._read_statement() ## raw format
+            read['data'] = read['data'][-1:] ## just the last document
+            docs = tbl._rows_to_docs(**read) ## do not transform the document, keep in raw format?
+            #docs = tbl._rows_to_docs(reader = False, load = False, **read) ## do not transform the document, keep in raw format?
+            latest = docs[-1]
+            tbl.exc(**tbl._id(latest)).full_delete()
+            latest = Dict(latest)
+            self.inc(self._id(latest)).update(max_workers = max_workers, pool_name = pool_name, **(res_no_ids))
+            doc.update(latest[ids])
+            latest[_deleted] = datetime.datetime.now()
+            self.archived().insert_one(latest, max_workers = max_workers, pool_name = pool_name)
         return doc
     
     
@@ -1992,7 +2007,7 @@ class sql_cursor(object):
         elif is_int(value):
             return self.read(value)
     
-    def update_one(self, doc, upsert = True, max_workers = 0, pool_name = None):
+    def update_one(self, doc, upsert = True, max_workers = 4, pool_name = None):
         """
         Similar to insert, except will throw an error if upsert = False and an existing document is not there
         """
@@ -2023,7 +2038,7 @@ class sql_cursor(object):
             raise ValueError(f'multiple documents found matching {doc}')
                 
             
-    def insert_many(self, docs, write = True, max_workers = 0, pool_name = None):
+    def insert_many(self, docs, write = True, max_workers = 4, pool_name = None):
         """
         insert multiple docs. 
 
@@ -2031,28 +2046,21 @@ class sql_cursor(object):
         ----------
         docs : list of dicts, dictable, pd.DataFrame
         """
-        ids = self._ids
         rs = dictable(docs)
         if self.defaults:
             rs = rs(**{k : v for k,v in self.defaults.items() if k not in rs.keys()})
         rs = _relabel(rs, self.columns, strict = False)
         if len(rs) > 0:
-            if True:
-                statement = []
-                args = []
-                for doc in rs:        
-                    tbl, statement_, args_ = self._insert_one_statement(doc = doc, ids = ids, write = write)
-                    if isinstance(statement_, list):
-                        statement.extend(statement_)
-                        args.extend(args_)
-                    else:
-                        statement.append(statement_)
-                        args.append(args_)                    
-                self.pooled_execute(statement, args, kwargs = None, max_workers = max_workers, pool_name = pool_name)
+            if self._pk and not self._is_archived():
+                _ = [self.insert_one(doc, write = write, max_workers = max_workers, pool_name = pool_name) for doc in rs]
             else:
-                for doc in rs:        
-                    tbl, statement_, args_ = self._insert_one_statement(doc = doc, ids = ids, write = write)
-                    self.pooled_execute(statement_, args_, kwargs = None, max_workers = max_workers, pool_name = pool_name)
+                columns = self.columns - self._ids
+                if write:
+                    rows = [self._dock(row, columns) for row in rs]
+                    rows = [self._write_doc(row, columns = columns) for row in rows]
+                else:
+                    rows = list(rs)
+                self.pooled_execute(self.table.insert(), rows, max_workers = max_workers, pool_name = pool_name)
         return self
 
     def __iter__(self):
@@ -2071,7 +2079,7 @@ class sql_cursor(object):
         return self
 
         
-    def insert(self, data = None, columns = None, max_workers = 0, pool_name = None, **kwargs):
+    def insert(self, data = None, columns = None, **kwargs):
         """
         This allows an insert of either a single row or multiple rows, from anything like 
 
@@ -2103,7 +2111,7 @@ class sql_cursor(object):
                     raise ValueError('Original value contained %s rows while new data has %s.\n We are unsure if you are trying to enter documents with list in them.\nCan you please use .insert_many() or .insert_one() to resolve this explicitly'%(len(data), len(rs)))
                 elif isinstance(data, dict) and not isinstance(data, dictable):
                     raise ValueError('Original value provided as a dict while now we have %s multiple rows.\nWe think you may be trying to enter a single document with lists in it.\nCan you please use .insert_many() or .insert_one() to resolve this explicitly'%len(rs))
-        return self.insert_many(rs, max_workers = max_workers, pool_name = pool_name)
+        return self.insert_many(rs)
 
     def find_one(self, doc = None, *args, **kwargs):
         res = self.find(*args, **kwargs)
@@ -2194,22 +2202,30 @@ class sql_cursor(object):
         if self.spec is not None:
             statement = statement.where(self.spec)
         statement = statement.values(kwargs)
-        self.pooled_execute(self, statement, max_workers = max_workers, pool_name = pool_name)
-        return self
-
+        if max_workers:
+            self.pooled_execute(self, statement, max_workers = max_workers, pool_name = pool_name)
+            return self
+        else:
+            self.execute(statement)
+            return self
+    
     set = update
 
     def full_delete(self, max_workers = 0, pool_name = None):
-        statement = self._delete_statement()
-        self.pooled_execute(statement, max_workers = max_workers, pool_name = pool_name)
-        return self
+        """
+        A standard delete will actually auto-archive a table with primary keys. # i.e. we have full audit
+        .full_delete() will drop the currently selected records without archiving them first
         
-
-    def _delete_statement(self):
+        """
         statement = self.table.delete()
         if self.spec is not None:
             statement = statement.where(self.spec)
-        return statement
+        if max_workers:
+            self.pooled_execute(self, statement, max_workers = max_workers, pool_name = pool_name)
+        else:
+            self.execute(statement)
+            return self
+        
 
     def delete(self, *df, **inc):
         """
@@ -2245,7 +2261,19 @@ class sql_cursor(object):
             for i in range(0, len(rs), _CHUNK):
                 res.inc(list(rs[i:i+_CHUNK])).delete()
             return self
+        ids = self._ids
         if len(res):
+            if self._pk and not self._is_archived(): ## we first copy the existing data out to deleted db
+                read = self._read_statement() 
+                docs = self._rows_to_docs(reader = False, load = False, **read)
+                #docs = self._rows_to_docs(load = True, **read)
+                deleted = datetime.datetime.now()
+                for doc in docs:
+                    doc[_deleted] = deleted
+                    for i in ids:
+                        if i in doc:
+                            del doc[i]
+                self.archived().insert_many(docs, write = False)
             res.full_delete()
         return self
 
@@ -2327,6 +2355,110 @@ class sql_cursor(object):
                                                                                               statement = text)
         return res
 
+    def _is_archived(self):
+        return is_str(self.schema) and (self.schema.startswith(_archived) or self.schema == self.archive_schema)
+
+    def archived(self):
+        """
+        When a table is indexed on primary keys, when we write to the table, to ensure full audit, we move existing records to an archive table
+        The archived table:
+            - lives in db.archive_schema.table
+            - is indexed on the original primary key + 'deleted' column, designating when the record was deleted
+            - has a modified writer: if you chose to save to c:/%key1/%key2.pickle, deleted data are saved to c:/%key1/%key2/%deleted.pickle
+
+        Parameters
+        ----------
+        schema: str
+            an alternative schema where the archive table is to be saved. by default, archive_current_schema is used
+        writer: str
+            an alternative location where archived documents are to be saved. by default, %deleted is added to end of location.
+            
+        Example:
+        --------
+        >>> from pyg import * 
+        >>> t = sql_table(db = 'test_db', server = 'DESKTOP-LU5C5QF', schema = 'test', table = 'archiving_test', 
+                          pk = ['a', 'b'], doc = True, writer = 'c:/temp/%a/%b.parquet')
+        >>> t.delete()
+        
+        >>> old_doc = dict(a = 'a', b = 'b', data = pd.Series([1,2,3]))
+        >>> t.insert_one(old_doc)
+        
+        >>> t.delete()
+        >>> import os
+        >>> os.listdir('c:/temp/a/b')
+
+        >>> new_doc = dict(a = 'a', b = 'b', data = pd.Series([4,5,6]))
+        >>> t.insert_one(new_doc)
+        >>> assert t[0]['data'].sum() == 15
+        
+        >>> t.archived().sort('deleted')[-3]
+        
+        Example: using a specified archive_writer and archive_schema
+        ---------
+        >>> from pyg import * 
+        >>> t = sql_table(db = 'test_db', schema = 'test', table = 'archiving_test', 
+                          pk = ['a', 'b'], doc = True, writer = 'c:/temp/%a/%b.parquet',
+                          archive_schema = 'archive', 
+                          archive_writer = 'c:/temp/archive/%a/%b/%deleted.parquet')
+        >>> t.delete()
+        >>> old_doc = dict(a = 'a', b = 'b', data = pd.Series([1,2,3]))
+        >>> t.insert_one(old_doc)        
+        >>> new_doc = dict(a = 'a', b = 'b', data = pd.Series([4,5,6]))
+        >>> t.insert_one(new_doc)
+        
+
+        ## the old data for the document should be here...
+        >>> import os
+        >>> assert len(os.listdir('c:/temp/archive/a/b')) > 0
+        
+        ## the old document should be here...
+        >>> assert t.archived().schema == 'archive'
+        >>> assert len(t.archived()) > 0
+
+        ### archive of archive is the same
+        >>> assert t.archived()._is_archived()
+        >>> assert t.archived().archived().schema == 'archive'
+        >>> t.drop(True)
+        --------
+        """
+        if self._is_archived():
+            return self
+        elif self._pk:
+            schema = self.archive_schema
+            writer = self.archive_writer
+            if schema is None:
+                schema = _archived + (self.schema or '')
+            if writer is None:
+                # logger.info('archived schema: %s'%schema)
+                writer = self.writer
+                if is_str(writer):
+                    suffix = '.' + writer.split('.')[-1]
+                # if is_str(writer) and _is_sql_writer.search(writer) is not None:
+                #     suffix = _is_sql_writer.search(writer).group(0)
+                    params = writer.split('/')
+                    if _is_sql_writer.search(writer) is not None:
+                        params[2] = schema
+                    writer = '/'.join(params)
+                    writer = writer.replace(suffix,'/%deleted' + suffix)                
+            res = sql_table(table = self.table, 
+                            db = self.db,                 
+                            server = self.server, 
+                            schema = schema, 
+                            pk = self._pk + [_deleted], 
+                            doc = self.doc, 
+                            writer = writer, 
+                            reader = self.reader, 
+                            session = self.session,
+                            engine = self.engine,
+                            archive_schema = self.archive_schema,
+                            archive_writer = self.archive_writer)
+            #res.spec = self.spec THIS NEEDS TO BE IMPLEMENTED PROPERLY
+            res.order = self.order
+            res.selection = self.selection
+            return res
+        else:
+            logger.info('cannot create an archived table if original table has no primary keys')
+            return self
                 
     @property
     def address(self):

@@ -9,6 +9,7 @@ server = db = schema = None
 import pandas as pd
 import pickle
 import pytest
+from pyg import timer
 
 def drop_table(table, schema = None, db = None, server = None):
     try:
@@ -17,6 +18,8 @@ def drop_table(table, schema = None, db = None, server = None):
         pass
 
 e = get_engine(db = 'test_db', schema = 'dbo', create = True)
+
+
 
 def test_create_parameters():   
     with pytest.raises(ValueError):
@@ -28,15 +31,29 @@ def test_create_parameters():
 def test_sql_table_base():
     table = 'test_sql_table_base'
     drop_table(table, db = 'test_db')
-    t = sql_table(table, db = 'test_db', nullable= dict(a=int, b=str))
-    assert len(t) == 0
+    t = self = sql_table(table, db = 'test_db', nullable= dict(a=int, b=str), dry_run = False)
+    assert len(self) == 0
     t = t.insert(dict(a=1, b='a'))
     assert len(t) == 1
     t = t.insert(dict(a=1, b='a'))
     assert len(t) == 2
     with pytest.raises(ValueError):
         t = t.update_one(dict(a=1, b='a'))
+    t.dry_run = False
+    rs = dictable(a = range(10000), b = 4)
+    _ = timer(lambda rs: t.insert_many(rs))(rs)
+    t = t.commit()
+    len(t)
+    _ = timer(lambda rs: t.insert_many(rs, max_workers = 0))(rs)
+    t.delete()
+    t.df()
+    t.commit()
+    t.rollback()
+    _ = timer(lambda rs: t.insert_many(rs, max_workers = 0))(rs)
+    _ = timer(lambda rs: [t.insert_one(doc, max_workers = 0) for doc in rs])(rs)
     t.drop()
+
+
 
 
 def test_doc_store_save_and_read_dictable():

@@ -31,17 +31,21 @@ def test_create_parameters():
 def test_sql_table_base():
     table = 'test_sql_table_base'
     drop_table(table, db = 'test_db')
-    t = self = sql_table(table, db = 'test_db', nullable= dict(a=int, b=str), dry_run = False)
+    t = self = sql_table(table, db = 'test_db', nullable= dict(a=int, b=str), _id = {'i': int})
     assert len(self) == 0
     t = t.insert(dict(a=1, b='a'))
     assert len(t) == 1
+    t[0]
     t = t.insert(dict(a=1, b='a'))
     assert len(t) == 2
+    t.df()
     with pytest.raises(ValueError):
         t = t.update_one(dict(a=1, b='a'))
     t.dry_run = False
     rs = dictable(a = range(10000), b = 4)
     _ = timer(lambda rs: t.insert_many(rs))(rs)
+    t = t.rollback()
+
     t = t.commit()
     len(t)
     _ = timer(lambda rs: t.insert_many(rs, max_workers = 0))(rs)

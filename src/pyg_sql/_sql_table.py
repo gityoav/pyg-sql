@@ -285,10 +285,10 @@ class sql_df():
         if stop is not None:
             statement = statement.limit(1+stop)
         if _pd_is_old:
-            data, columns = cursor.execute(statement, transform = _data_and_columns)
+            data, columns = cursor.execute(statement, transform = _data_and_columns, commit = False)
             res = pd.DataFrame(data, columns = columns)
         else:
-            res = cursor.execute(statement, transform = pd.DataFrame)
+            res = cursor.execute(statement, transform = pd.DataFrame, commit = False)
         if start is not None or stop is not None or step is not None:
             res = res.iloc[slice(start, stop, step)]
         if coerce_float:
@@ -1263,18 +1263,22 @@ class sql_cursor(object):
         return sa.Index(name, *columns, unique = unique).create(self.engine)
 
     
-    def pooled_execute(self, statement, args = None, kwargs = None, max_workers = 0, pool_name = None, transform = None):
-        if max_workers == 0:
+    def pooled_execute(self, statement, args = None, kwargs = None, max_workers = 1, pool_name = None, transform = None):
+        """
+        max_workers: bool / 0
+            we can only have one worker per pool for sql, to ensure that all statements get executed
+        """
+        if not max_workers:
             return self.execute(statement, args = args, kwargs = kwargs, transform = transform)
         session = self.connection()
         pool_name = pool_name or (self.server, self.db) ## a pool per session
-        pool = executor_pool(max_workers, pool_name)
+        pool = executor_pool(1, pool_name)
         commit = self.session is None and self.dry_run is None
         pool.submit(session_execute, session = session, statement = statement, args = args, kwargs = kwargs, commit = commit)
         return 
 
 
-    def execute(self, statement, args = None, kwargs = None, transform = None):
+    def execute(self, statement, args = None, kwargs = None, transform = None, commit = None):
         """
         executes a statement in two modes:
             if self.session exists or self.dry_run is set, we assume we are within a transaction and will simply execute using connection
@@ -1288,7 +1292,8 @@ class sql_cursor(object):
 
         """
         session = self.connection()
-        commit = self.session is None and self.dry_run is None
+        if commit is None:
+            commit = self.session is None and self.dry_run is None
         try:
             res = session_execute(session, statement = statement, args = args, kwargs = kwargs, commit = commit)
             if transform:
@@ -1728,7 +1733,7 @@ class sql_cursor(object):
         return tbl, statement, args
 
         
-    def insert_one(self, doc, ignore_bad_keys = False, write = True, max_workers = 0, pool_name = None):
+    def insert_one(self, doc, ignore_bad_keys = False, write = True, max_workers = 1, pool_name = None):
         """
         insert a single document to the table
 
@@ -1859,7 +1864,7 @@ class sql_cursor(object):
             start = None
         if stop is not None:
             statement = statement.limit(1+stop)
-        data, columns = self.execute(statement, transform = _data_and_columns)
+        data, columns = self.execute(statement, transform = _data_and_columns, commit = False)
         if start is not None or stop is not None or step is not None:
             data = data[slice(start, stop, step)]
         return dict(data = data, columns = columns)
@@ -1930,10 +1935,10 @@ class sql_cursor(object):
         value = len(self) + item if item < 0 else item
         statement = self.statement()
         if self.order is None:
-            data, columns = self.execute(statement.limit(value+1), transform = _data_and_columns)
+            data, columns = self.execute(statement.limit(value+1), transform = _data_and_columns, commit = False)
             row = data[value]
         else: ## can pull precisely one row given ordering
-            data, columns = self.execute(statement.offset(value).limit(value+1), transform = _data_and_columns)
+            data, columns = self.execute(statement.offset(value).limit(value+1), transform = _data_and_columns, commit = False)
             row = data[0]
         doc = self._rows_to_docs(data = row, reader = reader, columns = columns)
         rtn = self._undock(doc)
@@ -1992,7 +1997,7 @@ class sql_cursor(object):
         elif is_int(value):
             return self.read(value)
     
-    def update_one(self, doc, upsert = True, max_workers = 0, pool_name = None):
+    def update_one(self, doc, upsert = True, max_workers = 1, pool_name = None):
         """
         Similar to insert, except will throw an error if upsert = False and an existing document is not there
         """
@@ -2023,7 +2028,7 @@ class sql_cursor(object):
             raise ValueError(f'multiple documents found matching {doc}')
                 
             
-    def insert_many(self, docs, write = True, max_workers = 0, pool_name = None):
+    def insert_many(self, docs, write = True, max_workers = 1, pool_name = None):
         """
         insert multiple docs. 
 
@@ -2037,7 +2042,7 @@ class sql_cursor(object):
             rs = rs(**{k : v for k,v in self.defaults.items() if k not in rs.keys()})
         rs = _relabel(rs, self.columns, strict = False)
         if len(rs) > 0:
-            if True:
+            if False:
                 statement = []
                 args = []
                 for doc in rs:        
@@ -2071,7 +2076,7 @@ class sql_cursor(object):
         return self
 
         
-    def insert(self, data = None, columns = None, max_workers = 0, pool_name = None, **kwargs):
+    def insert(self, data = None, columns = None, max_workers = 1, pool_name = None, **kwargs):
         """
         This allows an insert of either a single row or multiple rows, from anything like 
 
@@ -2187,7 +2192,7 @@ class sql_cursor(object):
             statement = statement.order_by(*order_by)
         return statement
     
-    def update(self, max_workers = 0, pool_name = None, **kwargs):
+    def update(self, max_workers = 1, pool_name = None, **kwargs):
         if len(kwargs) == 0:
             return self
         statement = self.table.update()
@@ -2245,7 +2250,7 @@ class sql_cursor(object):
             for i in range(0, len(rs), _CHUNK):
                 res.inc(list(rs[i:i+_CHUNK])).delete()
             return self
-        if len(res):
+        if len(res) > 0:
             res.full_delete()
         return self
 

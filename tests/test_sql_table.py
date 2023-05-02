@@ -44,8 +44,10 @@ def test_sql_table_base():
     t.dry_run = False
     rs = dictable(a = range(10000), b = 4)
     _ = timer(lambda rs: t.insert_many(rs))(rs)
+    len(t)
+    _ = timer(lambda rs: [t.insert_one(row) for row in rs])(rs)
     t = t.rollback()
-
+    t
     t = t.commit()
     len(t)
     _ = timer(lambda rs: t.insert_many(rs, max_workers = 0))(rs)

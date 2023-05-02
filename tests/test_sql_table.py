@@ -31,7 +31,7 @@ def test_create_parameters():
 def test_sql_table_base():
     table = 'test_sql_table_base'
     drop_table(table, db = 'test_db')
-    t = self = sql_table(table, db = 'test_db', nullable= dict(a=int, b=str), _id = {'i': int})
+    t = self = sql_table(table, db = 'test_db', nullable= dict(a=int, b=str))
     assert len(self) == 0
     t = t.insert(dict(a=1, b='a'))
     assert len(t) == 1
@@ -42,12 +42,12 @@ def test_sql_table_base():
     with pytest.raises(ValueError):
         t = t.update_one(dict(a=1, b='a'))
     t.dry_run = False
-    rs = dictable(a = range(10000), b = 4)
-    _ = timer(lambda rs: t.insert_many(rs))(rs)
+    rs = dictable(a = range(10000), b = range(10000))
+    _ = timer(lambda rs: t.insert_many(rs, max_workers = 1))(rs)
     len(t)
     _ = timer(lambda rs: [t.insert_one(row) for row in rs])(rs)
-    t = t.rollback()
     t
+    t = t.rollback()
     t = t.commit()
     len(t)
     _ = timer(lambda rs: t.insert_many(rs, max_workers = 0))(rs)

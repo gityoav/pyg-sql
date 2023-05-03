@@ -1263,7 +1263,7 @@ class sql_cursor(object):
         return sa.Index(name, *columns, unique = unique).create(self.engine)
 
     
-    def pooled_execute(self, statement, args = None, kwargs = None, max_workers = 1, pool_name = None, transform = None):
+    def pooled_execute(self, statement, args = None, kwargs = None, max_workers = 0, pool_name = None, transform = None):
         """
         max_workers: bool / 0
             we can only have one worker per pool for sql, to ensure that all statements get executed
@@ -1737,7 +1737,7 @@ class sql_cursor(object):
         return tbl, statement, args
 
         
-    def insert_one(self, doc, ignore_bad_keys = False, write = True, max_workers = 1, pool_name = None):
+    def insert_one(self, doc, ignore_bad_keys = False, write = True, max_workers = 0, pool_name = None):
         """
         insert a single document to the table
 
@@ -2001,7 +2001,7 @@ class sql_cursor(object):
         elif is_int(value):
             return self.read(value)
     
-    def update_one(self, doc, upsert = True, max_workers = 1, pool_name = None):
+    def update_one(self, doc, upsert = True, max_workers = 0, pool_name = None):
         """
         Similar to insert, except will throw an error if upsert = False and an existing document is not there
         """
@@ -2032,7 +2032,7 @@ class sql_cursor(object):
             raise ValueError(f'multiple documents found matching {doc}')
                 
             
-    def insert_many(self, docs, write = True, max_workers = 1, pool_name = None):
+    def insert_many(self, docs, write = True, max_workers = 0, pool_name = None):
         """
         insert multiple docs. 
 
@@ -2080,7 +2080,7 @@ class sql_cursor(object):
         return self
 
         
-    def insert(self, data = None, columns = None, max_workers = 1, pool_name = None, **kwargs):
+    def insert(self, data = None, columns = None, max_workers = 0, pool_name = None, **kwargs):
         """
         This allows an insert of either a single row or multiple rows, from anything like 
 
@@ -2196,7 +2196,7 @@ class sql_cursor(object):
             statement = statement.order_by(*order_by)
         return statement
     
-    def update(self, max_workers = 1, pool_name = None, **kwargs):
+    def update(self, max_workers = 0, pool_name = None, **kwargs):
         if len(kwargs) == 0:
             return self
         statement = self.table.update()

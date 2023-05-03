@@ -1335,7 +1335,9 @@ class sql_cursor(object):
         """
         if self.dry_run is None: 
             self.dry_run = {} 
-        self.connection().__enter__()
+        connection = self.connection()
+        if hasattr(connection, '__enter__'):
+            connection.__enter__()
         return self
 
 
@@ -1351,7 +1353,9 @@ class sql_cursor(object):
             
         """
         self.commit()
-        self.connection().__exit__(type, value, traceback)
+        connection = self.connection()
+        if hasattr(connection, '__exit__'):
+            connection.__exit__(type, value, traceback)
         if self.dry_run == {}: 
             self.dry_run = None
         return self

@@ -286,10 +286,10 @@ class sql_df():
         if stop is not None:
             statement = statement.limit(1+stop)
         if _pd_is_old:
-            data, columns = cursor.execute(statement, transform = _data_and_columns, commit = False)
+            data, columns = cursor.execute(statement = statement, transform = _data_and_columns, commit = False)
             res = pd.DataFrame(data, columns = columns)
         else:
-            res = cursor.execute(statement, transform = pd.DataFrame, commit = False)
+            res = cursor.execute(statement = statement, transform = pd.DataFrame, commit = False)
         if start is not None or stop is not None or step is not None:
             res = res.iloc[slice(start, stop, step)]
         if coerce_float:
@@ -1270,7 +1270,7 @@ class sql_cursor(object):
             we can only have one worker per pool for sql, to ensure that all statements get executed
         """
         if not max_workers:
-            return self.execute(statement, args = args, kwargs = kwargs, transform = transform)
+            return self.execute(statement = statement, args = args, kwargs = kwargs, transform = transform)
         session = self.connection()
         pool_name = pool_name or (self.server, self.db) ## a pool per session
         pool = executor_pool(1, pool_name)
@@ -2204,14 +2204,14 @@ class sql_cursor(object):
         if self.spec is not None:
             statement = statement.where(self.spec)
         statement = statement.values(kwargs)
-        self.pooled_execute(self, statement, max_workers = max_workers, pool_name = pool_name)
+        self.pooled_execute(statement = statement, max_workers = max_workers, pool_name = pool_name)
         return self
 
     set = update
 
     def full_delete(self, max_workers = 0, pool_name = None):
         statement = self._delete_statement()
-        self.pooled_execute(statement, max_workers = max_workers, pool_name = pool_name)
+        self.pooled_execute(statement = statement, max_workers = max_workers, pool_name = pool_name)
         return self
         
 

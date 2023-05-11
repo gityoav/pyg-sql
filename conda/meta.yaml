@@ -1,6 +1,6 @@
 package:
     name: pyg-sql
-    version: 0.0.52
+    version: 0.0.54
 
 source:
     path: ../src

@@ -27,6 +27,21 @@ _index = 'index'
 
 _is_sql_writer = re.compile('.(sq|pd)[a-z]{1}$')
 
+_funcs = {np.max : func.max, len: func.count, np.min: func.min, np.sum: func.sum, np.mean: func.avg}
+
+@loop(dict)
+def _func(f):
+    if isinstance(f, str):
+        return getattr(func, f)
+    elif isinstance(func.max, sa.sql.functions._FunctionGenerator): ## f = sqlalchemy.func.max
+        return f
+    elif f in _funcs:
+        return _funcs[f]
+    elif callable(f): ## f = max
+        return getattr(func, f.__name__)
+    else:
+        raise ValueError(f'dont know what function is this {f}')
+
 
 
 NVARCHAR = sa.NVARCHAR(450) 
@@ -223,6 +238,32 @@ def _pw_filter(col, v):
 def _like_within_doc(v, k):
     return '%' + dumps(encode({k : v}))[1:-1] + '%'
 
+
+class sql_groupby():
+    """
+    a helper function
+    """
+    def __init__(self, cursor, by):
+        self.cursor = cursor
+        self.by = by
+        
+    def __call__(self, **aggregate):
+        by = as_list(self.by)
+        cursor = self.cursor
+        by_cols = cursor._col(by)
+        columns = cursor.table.columns
+        by_ = [columns[b] for b in by_cols]
+        aggregate_ = _func(cursor._col(aggregate))
+        statement = select(*by_, *[f(columns[col]) for col, f in aggregate_.items()]).group_by(*by_)
+        res = cursor.execute(statement, commit = False, transform = list)
+        rs = dictable(res, by + list(aggregate.keys()))
+        return rs
+    
+    def __getattr__(self, f):        
+        by = as_list(self.by)
+        cursor = self.cursor
+        aggregate = {key: f for key in ulist(cursor.selection or cursor.columns) - by}
+        return self(**aggregate)
 
 class sql_df():
     """
@@ -1193,7 +1234,62 @@ class sql_cursor(object):
     def connect(self, dry_run = False, session = None):
         return self.copy(dry_run = dry_run, session = session)
 
+    
+    def groupby(self, *by, **aggregate):
+        """
+        returns a simple groupby of data in table
         
+        >>> cursor = sql_table(server = 'DESKTOP-LU5C5QF', schema = 'dbo', db = 'test_db', table = 'test_groupby', non_null = dict(a = int, b = int, c = int), doc = False)
+        >>> data = dictable(a = 1, b = [1,1,2,2], c = [1,2,3,4]) + dictable(a = 0, b = [1,1,2,2], c = [1,2,3,4])
+        >>> cursor.insert_many(data)
+        >>> by = ('a',)
+        >>> aggregate = dict(c = 'max', b = 'min')
+        >>> cursor.groupby('a', c = 'max')     
+
+        dictable[2 x 2]
+        a|c
+        0|4
+        1|4
+
+        >>> cursor.groupby('a', 'b', c = 'min')     
+        dictable[4 x 3]
+        a|b|c
+        0|1|1
+        1|1|1
+        0|2|3
+        1|2|3
+
+        cursor[['a','b']].groupby('a').max
+        dictable[2 x 2]
+        a|b
+        0|2
+        1|2
+        
+        cursor.groupby('a', 'b').min
+        dictable[4 x 3]
+        a|b|c
+        0|1|1
+        1|1|1
+        0|2|3
+        1|2|3
+        
+        cursor.groupby('a', 'b')(c = 'max')
+        dictable[4 x 3]
+        a|b|c
+        0|1|2
+        1|1|2
+        0|2|4
+        1|2|4
+        
+        cursor.drop()
+        """
+        by = as_list(by)
+        res = sql_groupby(cursor = self, by = by)
+        if aggregate:
+            res = res(**aggregate)
+        return res
+        
+
     def connection(self, session = None):
         """
         Creates a valid session and attach it to the cursor
@@ -1661,6 +1757,14 @@ class sql_cursor(object):
 
 
     def _col(self, column):
+        """
+        map column into the underlying table columns
+        
+        Parameter
+        ----------
+        column: str/list/tuple/dict
+            
+        """
         columns = self.columns
         cols = dict(zip(lower(columns), columns))
         if is_str(column):

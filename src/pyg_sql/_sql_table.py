@@ -1748,10 +1748,10 @@ class sql_cursor(object):
     
     
     def __len__(self):
-        if self.spec is None:
-            return self.connection().query(self.table).count()
-        else:
-            return self.connection().query(self.table).where(self.spec).count()
+        statement = select(func.count()).select_from(self._table)
+        if self.spec is not None:
+            statement = statement.where(self.spec)
+        return self.execute(statement, transform = list, commit = False)[0][0]
     
     count = __len__
 

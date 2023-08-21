@@ -535,11 +535,14 @@ def _create_engine(server, db , **connection):
     connection_info = get_connection_info(server=server, db = db, **connection)    
     try:
         con = pyodbc.connect(connection_info, autocommit = False)    
-        return sa.create_engine("mssql://" + connection_info, creator = lambda : con, echo = False, use_setinputsizes = True)
+        e = sa.create_engine("mssql://" + connection_info, creator = lambda : con, echo = False, use_setinputsizes = True)
+        print('created engine using connection info', "mssql://" + connection_info)
     except Exception:
         cstr = get_cstr(server=server, db = db, **connection)
-        return sa.create_engine(cstr)        
-    
+        e = sa.create_engine(cstr)        
+        print('created engine using csr', cstr)
+    return e
+
 
 def _get_engine(*pairs, **connection):  
     connection = _pairs2connection(*pairs, **connection)

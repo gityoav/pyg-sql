@@ -14,7 +14,16 @@ import pandas as pd
 import numpy as np
 import re
 import pyodbc
-import urllib
+
+
+@loop(list, tuple, dict)
+def impartial(v):
+    if isinstance(v, partial):
+        args, keywords = impartial((v.args, v.keywords))
+        return v.func(*args, **keywords)
+    else:
+        return v
+       
 
 _CHUNK = 100
 _MAX_WORKERS = 0
@@ -453,6 +462,22 @@ def _db(connection):
     return db
     
 
+_CSTR = 'Driver={ODBC Driver 17 for SQL Server};Server=%(server)s;Database=%(db)s;Authentication=ActiveDirectoryIntegrated;'
+
+def get_connection_info(*pairs, **connection):
+    """
+    determines the connection string
+    """
+    connection = _pairs2connection(*pairs, **connection)
+    server = get_server(connection.pop('server', None))
+    connection['driver'] = get_driver(connection.pop('driver', None))
+    db = _db(connection)
+    if '//' in server:
+        return server
+    else:
+        cstr = _CSTR%dict(server=server, db = db)
+        return cstr
+
 def get_cstr(*pairs, **connection):
     """
     determines the connection string
@@ -464,11 +489,8 @@ def get_cstr(*pairs, **connection):
     if '//' in server:
         return server
     else:
-        if 'Authentication' not in connection:
-            connection['Authentication'] = 'ActiveDirectoryIntegrated'
         params = '&'.join('%s=%s'%(k,v) for k,v in connection.items())
         cstr = 'mssql+pyodbc://%(server)s/%(db)s%(params)s'%dict(server=server, db = db, params = '?' +params if params else '')
-        print(cstr)
         return cstr
 
 def create_schema(engine, schema, create = True, session = None):
@@ -509,8 +531,14 @@ def create_schema(engine, schema, create = True, session = None):
     return schema
     
 @cache
-def _create_engine(cstr):
-    return sa.create_engine(cstr)
+def _create_engine(server, db , **connection):
+    connection_info = get_connection_info(server=server, db = db, **connection)    
+    try:
+        con = pyodbc.connect(connection_info, autocommit = False)    
+        return sa.create_engine("mssql://" + connection_info, creator = lambda : con, echo = False, use_setinputsizes = True)
+    except Exception:
+        cstr = get_cstr(server=server, db = db, **connection)
+        return sa.create_engine(cstr)        
     
 
 def _get_engine(*pairs, **connection):  
@@ -532,15 +560,15 @@ def _get_engine(*pairs, **connection):
     if (server, db) in SESSIONS:
         return SESSIONS[(server, db)].get_bind()
     server = get_server(server)
-    cstr = get_cstr(server=server, db = db, **connection)    
     if callable(engine): # delegates connection to another function
-        e = Dict(server = server, db = db, environment = server, connection = cstr).apply(engine)
+        e = Dict(server = server, db = db, environment = server, **connection).apply(engine)
     else:
-        e = _create_engine(cstr)
+        e = _create_engine(server = server, db = db, **connection)
     try:
         sa.inspect(e)
     except Exception:
         if create is True or (is_str(create) and 'd' in create.lower()): ## create can be a "level" specifying if it is to be created
+            cstr = get_cstr(server=server, db = db, **connection)    
             create_database(cstr)
             logger.info('creating database: %s'%db)
         else:
@@ -692,6 +720,7 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
     Example: simple join
         
     """
+    table, db, schema, session, server, engine = impartial((table, db, schema, session, server, engine ))
     if isinstance(table, str):
         values = table.split('.')
         if len(values) == 2:
@@ -1184,13 +1213,16 @@ class sql_cursor(object):
         doc: bool
             Specifies if to create the table as a document store
         """
+        
+        table, db, schema, session, server, engine = impartial((table, db, schema, session, server, engine ))
         if is_str(table):
             ### you shouldn't really construct the table using sql_cursor, sql_table should be the entry point.
             table = sql_table(table = table, schema = schema, db = db, server = server, 
                               engine = engine, session = session, dry_run = dry_run,
                               pk = pk, doc = doc, 
                               reader = reader, writer = writer)
-            
+        
+        
         if isinstance(table, sql_cursor):
             db = table.db if db is None else db
             engine = table.engine if engine is None else engine

@@ -14,6 +14,7 @@ import pandas as pd
 import numpy as np
 import re
 import pyodbc
+import urllib
 
 _CHUNK = 100
 _MAX_WORKERS = 0
@@ -463,9 +464,12 @@ def get_cstr(*pairs, **connection):
     if '//' in server:
         return server
     else:
+        if 'Authentication' not in connection:
+            connection['Authentication'] = 'ActiveDirectoryIntegrated'
         params = '&'.join('%s=%s'%(k,v) for k,v in connection.items())
-        return 'mssql+pyodbc://%(server)s/%(db)s%(params)s'%dict(server=server, db = db, params = '?' +params if params else '')
-
+        cstr = 'mssql+pyodbc://%(server)s/%(db)s%(params)s'%dict(server=server, db = db, params = '?' +params if params else '')
+        print(cstr)
+        return cstr
 
 def create_schema(engine, schema, create = True, session = None):
     """

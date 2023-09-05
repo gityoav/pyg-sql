@@ -17,6 +17,8 @@ def drop_table(table, schema = None, db = None, server = None):
     except Exception:
         pass
 
+from pyg_base import cfg_read, cfg_write
+#cfg = cfg_read(); cfg['sql_server']= 'DESKTOP-LU5C5QF'; cfg_write(cfg)
 e = get_engine(db = 'test_db', schema = 'dbo', create = True)
 
 

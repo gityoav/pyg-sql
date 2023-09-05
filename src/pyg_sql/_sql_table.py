@@ -15,6 +15,10 @@ import numpy as np
 import re
 import pyodbc
 
+if hasattr(sa.engine.row, 'LegacyRow'): ## SQL ALCHEMY 1.4 and below
+    ROW_TYPE = (sa.engine.row.LegacyRow, sa.engine.row.Row)
+else:
+    ROW_TYPE = sa.engine.row.Row
 
 @loop(list, tuple, dict)
 def impartial(v):
@@ -525,7 +529,7 @@ def create_schema(engine, schema, create = True, session = None):
                 raise ValueError(f'Schema {schema} does not exist. You have to explicitly mandata the creation of a schema by setting create=True or create="d" or create="s"')
             logger.info('creating schema: %s'%schema)
     except AttributeError: #MS SQL vs POSTGRES
-        if not engine.dialect.has_schema(engine, schema):
+        if not engine.dialect.has_schema(session, schema):
             (session or engine).execute(sa.schema.CreateSchema(schema))
             logger.info('creating schema: %s'%schema)
     return schema
@@ -825,6 +829,7 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
 
     ## time to access/create tables
     e = _get_engine(server = server, db = db, schema = schema, create = create, engine = engine, session = session)
+    session = get_session(db = db, engine = engine, session = session)
     schema = create_schema(e, _schema(schema), create = create, session = session)
     try:
         tbl = _get_table(table_name = table_name, schema = schema, db = db, server = server, create = create, engine = e, session = session)
@@ -1987,7 +1992,8 @@ class sql_cursor(object):
         """
         reader = self._reader(reader)
         res = row
-        if isinstance(res, (sa.engine.row.LegacyRow, sa.engine.row.Row)):
+        
+        if isinstance(res, ROW_TYPE):
             res = tuple(res)
         if isinstance(res, (list, tuple)):
             res = type(res)([self._read_item(item, reader = reader, load = load) for item in res])

@@ -828,11 +828,11 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         create = 's' if len(cols) else False
 
     ## time to access/create tables
-    e = _get_engine(server = server, db = db, schema = schema, create = create, engine = engine, session = session)
+    engine = _get_engine(server = server, db = db, schema = schema, create = create, engine = engine, session = session)
     session = get_session(db = db, engine = engine, session = session)
-    schema = create_schema(e, _schema(schema), create = create, session = session)
+    schema = create_schema(engine, _schema(schema), create = create, session = session)
     try:
-        tbl = _get_table(table_name = table_name, schema = schema, db = db, server = server, create = create, engine = e, session = session)
+        tbl = _get_table(table_name = table_name, schema = schema, db = db, server = server, create = create, engine = engine, session = session)
         if doc is None and _doc in [col.name for col in tbl.columns]:
             doc = _doc
     except sa.exc.NoSuchTableError:        
@@ -844,14 +844,14 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         if create is True or (is_str(create) and (create.lower()[0] in 'tsd')):
             logger.info('creating table: %s.%s.%s%s'%(db, schema, table_name, [col.name for col in cols]))
             tbl = Table(table_name, meta, *cols, schema = schema)
-            meta.create_all(e)
+            meta.create_all(engine)
             idx_keys = [tbl.c[key] for key in pks]
             if pks:
                 idx = sa.Index("idx_pks", *idx_keys, unique=True)
-                idx.create(e)
+                idx.create(engine)
         else:
             raise ValueError(f'table {table_name} does not exist. You need to explicitly set create=True or create="t/s/d" to mandate table creation')
-    res = sql_cursor(table = tbl, schema = schema, db = db, server = server, engine = e, session = session, dry_run = dry_run,
+    res = sql_cursor(table = tbl, schema = schema, db = db, server = server, engine = engine, session = session, dry_run = dry_run,
                      reader = reader, writer = writer, defaults = defaults,
                      pk = list(pk) if isinstance(pk, dict) else pk, doc = doc,
                      spec = spec, selection = selection, order = order, joint = joint)

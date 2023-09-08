@@ -2332,7 +2332,7 @@ class sql_cursor(object):
                     raise ValueError(f'{col} not found in the table')
             else:
                 selection.append(col) ## it is assumed to be a sqlalchemy selection
-        statement = select(selection).select_from(table)
+        statement = select(*selection).select_from(table)
         return statement
 
     

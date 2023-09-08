@@ -841,7 +841,7 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
     ## time to access/create tables
     engine = _get_engine(server = server, db = db, schema = schema, create = create, engine = engine, session = session)
     session = get_session(db = db, engine = engine, session = session)
-    schema = create_schema(engine = engine, schema = _schema(schema), create = create, session = session)
+    schema = create_schema(engine = engine, schema = _schema(schema), create = create, session = session, db = db, server = server)
     try:
         tbl = _get_table(table_name = table_name, schema = schema, db = db, server = server, create = create, engine = engine, session = session)
         if doc is None and _doc in [col.name for col in tbl.columns]:

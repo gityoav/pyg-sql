@@ -865,7 +865,7 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
             else:
                 raise ValueError(f'table {table_name} does not exist. You need to explicitly set create=True or create="t/s/d" to mandate table creation')
     else:
-        tbl = _TABLES[tbl]
+        tbl = _TABLES[key]
     if doc is None and _doc in [col.name for col in tbl.columns]:
         doc = _doc
     res = sql_cursor(table = tbl, schema = schema, db = db, server = server, engine = engine, session = session, dry_run = dry_run,

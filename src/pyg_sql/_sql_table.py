@@ -796,14 +796,10 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         schema = create_schema(engine = engine, schema = _schema(schema), create = create, session = session, db = db, server = server)
         try:
             _TABLES[key] = tbl = _get_table(table_name = table_name, schema = schema, db = db, server = server, create = create, engine = engine, session = session)
-            if doc is None and _doc in [col.name for col in tbl.columns]:
-                doc = _doc
         except sa.exc.NoSuchTableError:        
             if doc is None and len(non_null) == 0 and len(nullable) == 0: #user specified nothing but pk so assume table should contain SOMETHING :-)
                 doc = _doc
-            meta = MetaData()
-    
-    
+            meta = MetaData()    
             ### we resolve some parameters
             if doc is True: #user wants a doc
                 doc = _doc
@@ -868,7 +864,10 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
                 _TABLES[key] = tbl
             else:
                 raise ValueError(f'table {table_name} does not exist. You need to explicitly set create=True or create="t/s/d" to mandate table creation')
-
+    else:
+        tbl = _TABLES[tbl]
+    if doc is None and _doc in [col.name for col in tbl.columns]:
+        doc = _doc
     res = sql_cursor(table = tbl, schema = schema, db = db, server = server, engine = engine, session = session, dry_run = dry_run,
                      reader = reader, writer = writer, defaults = defaults,
                      pk = list(pk) if isinstance(pk, dict) else pk, doc = doc,

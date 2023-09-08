@@ -29,8 +29,12 @@ def impartial(v):
         return v
        
 
+SESSIONS = {}
+_SCHEMAS = {}
+_TABLES = {}
 _CHUNK = 100
 _MAX_WORKERS = 0
+
 
 _id = '_id'
 _doc = 'doc'
@@ -497,7 +501,8 @@ def get_cstr(*pairs, **connection):
         cstr = 'mssql+pyodbc://%(server)s/%(db)s%(params)s'%dict(server=server, db = db, params = '?' +params if params else '')
         return cstr
 
-def create_schema(engine, schema, create = True, session = None):
+
+def create_schema(engine, session, schema, create = True, server = None, db = None):
     """
     creates a new schema for a particular engine.
 
@@ -521,19 +526,23 @@ def create_schema(engine, schema, create = True, session = None):
     """
     if schema is None:
         return
-    try:
-        if schema not in engine.dialect.get_schema_names(engine):
-            if create is True or (is_str(create) and (create.lower()[0] in 'sd')):
-                (session or engine).execute(sa.schema.CreateSchema(schema))
-            else:
-                raise ValueError(f'Schema {schema} does not exist. You have to explicitly mandata the creation of a schema by setting create=True or create="d" or create="s"')
-            logger.info('creating schema: %s'%schema)
-    except AttributeError: #MS SQL vs POSTGRES
-        if not engine.dialect.has_schema(session, schema):
-            (session or engine).execute(sa.schema.CreateSchema(schema))
-            logger.info('creating schema: %s'%schema)
-    return schema
-    
+    key = (server, db, schema, create)
+    if key not in _SCHEMAS:
+        try:
+            if schema not in engine.dialect.get_schema_names(session):
+                if create is True or (is_str(create) and (create.lower()[0] in 'sd')):
+                    session.execute(sa.schema.CreateSchema(schema))
+                else:
+                    raise ValueError(f'Schema {schema} does not exist. You have to explicitly mandata the creation of a schema by setting create=True or create="d" or create="s"')
+                logger.info('creating schema: %s'%schema)
+        except AttributeError: #MS SQL vs POSTGRES
+            if not engine.dialect.has_schema(session, schema):
+                session.execute(sa.schema.CreateSchema(schema))
+                logger.info('creating schema: %s'%schema)
+        _SCHEMAS[key] = schema
+    return _SCHEMAS[key]
+
+
 @cache
 def _create_engine(server, db , **connection):
     connection_info = get_connection_info(server=server, db = db, **connection)    
@@ -612,11 +621,11 @@ def get_session(db, server = None, engine = None, session = None, session_maker 
         if address not in SESSIONS:
             SESSIONS[address] = session
         return session
-    elif address in SESSIONS:
-        return SESSIONS[address]
-    e = _get_engine(server = server, db = db, engine = engine)
-    session_maker = session_maker or Session
-    return session_maker(e, **session_kwargs)
+    if address not in SESSIONS:
+        engine = _get_engine(server = server, db = db, engine = engine)
+        session_maker = session_maker or Session
+        SESSIONS[address] = session = session_maker(engine, **session_kwargs)
+    return session
 
 
 def get_engine(*pairs, **connection):
@@ -629,11 +638,13 @@ def get_engine(*pairs, **connection):
     return _get_engine(*pairs, **connection)
     
 
-@cache
 def _get_table(table_name, schema, db, server, create, engine = None, session = None):
-    e = _get_engine(server = server, db = db, schema = schema, create = create, engine = engine, session = session)
-    meta = MetaData()
-    return Table(table_name, meta, autoload_with = e, schema = schema)
+    key = (server, db, schema, table_name, create) 
+    if key not in _TABLES:
+        engine = _get_engine(server = server, db = db, schema = schema, create = create, engine = engine, session = session)
+        meta = MetaData()
+        _TABLES[key] = Table(table_name, meta, autoload_with = engine, schema = schema, extend_existing = True)
+    return _TABLES[key]
 
 
 def sql_has_table(table_name, schema, db, server, engine = None, session = None):
@@ -830,7 +841,7 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
     ## time to access/create tables
     engine = _get_engine(server = server, db = db, schema = schema, create = create, engine = engine, session = session)
     session = get_session(db = db, engine = engine, session = session)
-    schema = create_schema(engine, _schema(schema), create = create, session = session)
+    schema = create_schema(engine = engine, schema = _schema(schema), create = create, session = session)
     try:
         tbl = _get_table(table_name = table_name, schema = schema, db = db, server = server, create = create, engine = engine, session = session)
         if doc is None and _doc in [col.name for col in tbl.columns]:
@@ -859,7 +870,6 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         
 
 ### global. indexed on server and db
-SESSIONS = dict()
 
 
 class sql_cursor(object):

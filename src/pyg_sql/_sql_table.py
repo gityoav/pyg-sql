@@ -1722,10 +1722,10 @@ class sql_cursor(object):
     def drop(self):
         if self.selection or self.spec:
             raise ValueError('To avoid confusing .delete and .drop, dropping a table can only be done if there is no selection and no filtering')
-        logger.info('dropping table: %s.%s.%s'%(_database(self.db), 
-                                                  self.schema, 
-                                                  self.table.name))
-
+        key = (self.server, self.db, self.schema, self.table.name)
+        logger.info('dropping table: %s'%key)
+        if key in _TABLES:
+            del _TABLES[key]
         self.table.drop(bind = self.engine)
 
     

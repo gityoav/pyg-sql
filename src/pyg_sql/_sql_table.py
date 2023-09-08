@@ -639,7 +639,7 @@ def get_engine(*pairs, **connection):
     
 
 def _get_table(table_name, schema, db, server, create, engine = None, session = None):
-    key = (server, db, schema, table_name, create) 
+    key = (server, db, schema, table_name) 
     if key not in _TABLES:
         engine = _get_engine(server = server, db = db, schema = schema, create = create, engine = engine, session = session)
         meta = MetaData()
@@ -775,26 +775,7 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         doc = table.doc if doc is None else doc
         pk = table.pk if pk is None else pk
         table = table.name
-    
-    ### we resolve some parameters
-    if doc is True: #user wants a doc
-        doc = _doc
-    non_null = non_null or {}
-    nullable = nullable or {}
-    pks = pk or {}
-    if isinstance(pks, list):
-        pks = {k : str for k in pks}
-    elif isinstance(pks, str):
-        pks = {pks : str}
-    if isinstance(non_null, list):
-        non_null = {k : str for k in non_null}
-    elif isinstance(non_null, str):
-        non_null = {non_null : str}
-    #pks.update(non_null)
-    if isinstance(nullable, list):
-        nullable = {k : str for k in nullable}
-    elif isinstance(nullable, str):
-        nullable = {nullable: str}
+
     if isinstance(table, str):
         table_name = table 
     else:
@@ -802,66 +783,92 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
         if schema is None:
             schema = table.schema
 
-    ## do we have any columns in table?
-    cols = []
-    if isinstance(table, sa.sql.schema.Table):
-        for col in table.columns:
-            col = copy(col)
-            del col.table
-            cols.append(col)
-    if _id is not None:
-        if isinstance(_id, str):
-            _id = {_id : int}
-        if isinstance(_id, list):
-            _id = {i : int for i in _id}
-        for i, t in _id.items():
-            if i not in [col.name for col in cols]:
-                if t == int:                    
-                    cols.append(Column(i, Integer, Identity(always = True)))
-                elif t == datetime.datetime:
-                    cols.append(Column(i, DATETIME(timezone=True), nullable = False, server_default=func.now()))
-                else:
-                    raise ValueError('not sure how to create an automatic item with column %s'%t)
-
-    col_names = [col.name for col in cols]
-    pk_cols   = [Column(k, _as_type(t, _pk_types), nullable = False, autoincrement = False) for k, t in pks.items() if k not in col_names]
-    non_nulls = [Column(k, _as_type(t, _types), nullable = False, autoincrement = False) for k, t in non_null.items() if k not in col_names and k not in pks]    
-    nullables = [Column(k.lower(), _as_type(t, _types), nullable = True, autoincrement = False) for k, t in nullable.items() if k not in col_names and k not in pks and k not in non_null]
-    if not doc or doc in col_names or doc in pks or doc in non_null or doc in nullable:
-        docs = []
-    else:        
-        docs = [Column(doc, String, nullable = True, autoincrement = False)]
-    cols = cols + pk_cols + non_nulls + nullables + docs
-
-
-    ## creation logic:
     if create is None:
-        create = 's' if len(cols) else False
-
+        create = False if not nullable and not non_null and not pk else 's'
+    
+    ## creation logic:
     ## time to access/create tables
-    engine = _get_engine(server = server, db = db, schema = schema, create = create, engine = engine, session = session)
-    session = get_session(db = db, engine = engine, session = session)
-    schema = create_schema(engine = engine, schema = _schema(schema), create = create, session = session, db = db, server = server)
-    try:
-        tbl = _get_table(table_name = table_name, schema = schema, db = db, server = server, create = create, engine = engine, session = session)
-        if doc is None and _doc in [col.name for col in tbl.columns]:
-            doc = _doc
-    except sa.exc.NoSuchTableError:        
-        if doc is None and len(non_null) == 0 and len(nullable) == 0: #user specified nothing but pk so assume table should contain SOMETHING :-)
-            doc = _doc
-        meta = MetaData()
-        if len(cols) == 0:
-            raise ValueError('You seem to be trying to create a table with no columns? Perhaps you are trying to point to an existing table and getting its name wrong?')
-        if create is True or (is_str(create) and (create.lower()[0] in 'tsd')):
-            logger.info('creating table: %s.%s.%s%s'%(db, schema, table_name, [col.name for col in cols]))
-            tbl = Table(table_name, meta, *cols, schema = schema)
-            meta.create_all(engine)
-            idx_keys = [tbl.c[key] for key in pks]
-            if pks:
-                idx = sa.Index("idx_pks", *idx_keys, unique=True)
-                idx.create(engine)
-        else:
-            raise ValueError(f'table {table_name} does not exist. You need to explicitly set create=True or create="t/s/d" to mandate table creation')
+    key = (server, db, schema, table_name) 
+
+    if key not in _TABLES:
+        engine = _get_engine(server = server, db = db, schema = schema, create = create, engine = engine, session = session)
+        session = get_session(db = db, engine = engine, session = session)
+        schema = create_schema(engine = engine, schema = _schema(schema), create = create, session = session, db = db, server = server)
+        try:
+            _TABLES[key] = tbl = _get_table(table_name = table_name, schema = schema, db = db, server = server, create = create, engine = engine, session = session)
+            if doc is None and _doc in [col.name for col in tbl.columns]:
+                doc = _doc
+        except sa.exc.NoSuchTableError:        
+            if doc is None and len(non_null) == 0 and len(nullable) == 0: #user specified nothing but pk so assume table should contain SOMETHING :-)
+                doc = _doc
+            meta = MetaData()
+    
+    
+            ### we resolve some parameters
+            if doc is True: #user wants a doc
+                doc = _doc
+            non_null = non_null or {}
+            nullable = nullable or {}
+            pks = pk or {}
+            if isinstance(pks, list):
+                pks = {k : str for k in pks}
+            elif isinstance(pks, str):
+                pks = {pks : str}
+            if isinstance(non_null, list):
+                non_null = {k : str for k in non_null}
+            elif isinstance(non_null, str):
+                non_null = {non_null : str}
+            #pks.update(non_null)
+            if isinstance(nullable, list):
+                nullable = {k : str for k in nullable}
+            elif isinstance(nullable, str):
+                nullable = {nullable: str}
+            ## do we have any columns in table?
+            cols = []
+            if isinstance(table, sa.sql.schema.Table):
+                for col in table.columns:
+                    col = copy(col)
+                    del col.table
+                    cols.append(col)
+            if _id is not None:
+                if isinstance(_id, str):
+                    _id = {_id : int}
+                if isinstance(_id, list):
+                    _id = {i : int for i in _id}
+                for i, t in _id.items():
+                    if i not in [col.name for col in cols]:
+                        if t == int:                    
+                            cols.append(Column(i, Integer, Identity(always = True)))
+                        elif t == datetime.datetime:
+                            cols.append(Column(i, DATETIME(timezone=True), nullable = False, server_default=func.now()))
+                        else:
+                            raise ValueError('not sure how to create an automatic item with column %s'%t)
+        
+            col_names = [col.name for col in cols]
+            pk_cols   = [Column(k, _as_type(t, _pk_types), nullable = False, autoincrement = False) for k, t in pks.items() if k not in col_names]
+            non_nulls = [Column(k, _as_type(t, _types), nullable = False, autoincrement = False) for k, t in non_null.items() if k not in col_names and k not in pks]    
+            nullables = [Column(k.lower(), _as_type(t, _types), nullable = True, autoincrement = False) for k, t in nullable.items() if k not in col_names and k not in pks and k not in non_null]
+            if not doc or doc in col_names or doc in pks or doc in non_null or doc in nullable:
+                docs = []
+            else:        
+                docs = [Column(doc, String, nullable = True, autoincrement = False)]
+            cols = cols + pk_cols + non_nulls + nullables + docs
+    
+            if len(cols) == 0:
+                raise ValueError('You seem to be trying to create a table with no columns? Perhaps you are trying to point to an existing table and getting its name wrong?')
+    
+            if create is True or (is_str(create) and (create.lower()[0] in 'tsd')):
+                logger.info('creating table: %s.%s.%s%s'%(db, schema, table_name, [col.name for col in cols]))
+                tbl = Table(table_name, meta, *cols, schema = schema)
+                meta.create_all(engine)
+                idx_keys = [tbl.c[key] for key in pks]
+                if pks:
+                    idx = sa.Index("idx_pks", *idx_keys, unique=True)
+                    idx.create(engine)
+                _TABLES[key] = tbl
+            else:
+                raise ValueError(f'table {table_name} does not exist. You need to explicitly set create=True or create="t/s/d" to mandate table creation')
+
     res = sql_cursor(table = tbl, schema = schema, db = db, server = server, engine = engine, session = session, dry_run = dry_run,
                      reader = reader, writer = writer, defaults = defaults,
                      pk = list(pk) if isinstance(pk, dict) else pk, doc = doc,

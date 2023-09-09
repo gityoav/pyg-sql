@@ -785,10 +785,13 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
 
     if create is None:
         create = False if not nullable and not non_null and not pk else 's'
+
     
     ## creation logic:
     ## time to access/create tables
     key = (server, db, schema, table_name) 
+    if doc is True:
+        doc = _doc
 
     if key not in _TABLES:
         engine = _get_engine(server = server, db = db, schema = schema, create = create, engine = engine, session = session)
@@ -801,8 +804,6 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
                 doc = _doc
             meta = MetaData()    
             ### we resolve some parameters
-            if doc is True: #user wants a doc
-                doc = _doc
             non_null = non_null or {}
             nullable = nullable or {}
             pks = pk or {}
@@ -866,8 +867,10 @@ def sql_table(table, db = None, non_null = None, nullable = None, _id = None, sc
                 raise ValueError(f'table {table_name} does not exist. You need to explicitly set create=True or create="t/s/d" to mandate table creation')
     else:
         tbl = _TABLES[key]
+
     if doc is None and _doc in [col.name for col in tbl.columns]:
         doc = _doc
+
     res = sql_cursor(table = tbl, schema = schema, db = db, server = server, engine = engine, session = session, dry_run = dry_run,
                      reader = reader, writer = writer, defaults = defaults,
                      pk = list(pk) if isinstance(pk, dict) else pk, doc = doc,

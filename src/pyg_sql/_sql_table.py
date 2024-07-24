@@ -213,10 +213,10 @@ def _relabel(res, selection, strict = True):
             if sorted(columns) == sorted(selection): ## nothing to do
                 return res
             lower2selection = dict(zip(lower_selection, selection))
-            return type(res)({lower2selection[key.lower()] : value for key, value in res.items()})
+            return type(res)(**{lower2selection[key.lower()] : value for key, value in res.items()})
         elif not strict:
             lower2selection = dict(zip(lower_selection, selection))
-            return type(res)({lower2selection.get(key.lower(), key): value for key, value in res.items()})
+            return type(res)(**{lower2selection.get(key.lower(), key): value for key, value in res.items()})
         else:
             return res            
     else:
@@ -1835,7 +1835,7 @@ class sql_cursor(object):
         elif isinstance(column, (list, tuple)):
             return [cols[c.lower()] if isinstance(c,str) else c for c in column]
         elif isinstance(column, dict):
-            return type(column)({cols[k.lower()]: v for k, v in column.items()})
+            return type(column)(**{cols[k.lower()]: v for k, v in column.items()})
         else:
             raise ValueError(f'column {column} cannot be converted to table columns')
 
@@ -1857,7 +1857,7 @@ class sql_cursor(object):
         """
         docs = {k : v for k, v in doc.items() if isinstance(v, dict)}
         columns = ulist(self.columns if columns is None else columns)
-        res = type(doc)({key : value for key, value in doc.items() if key in columns}) ## These are the only valid columns to the table
+        res = type(doc)(**{key : value for key, value in doc.items() if key in columns}) ## These are the only valid columns to the table
         if len(docs) == 0:
             return res
         missing = {k : [] for k in columns if k not in doc}
@@ -1894,7 +1894,7 @@ class sql_cursor(object):
                 raise ValueError(f'cannot insert into db a document with these keys: {bad_keys}. The table only has these keys: {columns}')        
         doc_id = self._id(edoc)
         res = self._write_doc(edoc, columns = columns) if write else edoc
-        res_no_ids = type(res)({k : v for k, v in res.items() if k not in ids}) if ids else res
+        res_no_ids = type(res)(**{k : v for k, v in res.items() if k not in ids}) if ids else res
                 
         tbl, statement, args = None, self.table.insert(), ([res_no_ids],)
         if doc_id: ## there may be documents to remove first        
@@ -1948,7 +1948,7 @@ class sql_cursor(object):
             edoc = {key: value for key, value in edoc.items() if key in columns}
             pk = self._pk + [self.doc]
             drop = [key for key in edoc if key not in pk]
-            edoc[self.doc] = type(doc)({k : v for k, v in doc.items() if k not in drop})
+            edoc[self.doc] = type(doc)(**{k : v for k, v in doc.items() if k not in drop})
             return edoc
 
     def _writer(self, writer = None, doc = None, kwargs = None):
@@ -1962,7 +1962,7 @@ class sql_cursor(object):
     def _write_doc(self, doc, writer = None, columns = None):
         columns = columns or self.columns
         writer = self._writer(writer, doc = doc, kwargs = doc)
-        res = type(doc)({key: self._write_item(value, writer = writer) for key, value in doc.items() if key in columns})
+        res = type(doc)(**{key: self._write_item(value, writer = writer) for key, value in doc.items() if key in columns})
         return res
 
     def _write_item(self, item, writer = None, kwargs = None):

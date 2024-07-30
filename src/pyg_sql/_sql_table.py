@@ -34,6 +34,8 @@ _SCHEMAS = {}
 _TABLES = {}
 _CHUNK = 100
 _MAX_WORKERS = 0
+_LATEST_DRIVER = sorted([d for d in pyodbc.drivers() if d.startswith('ODBC')])[-1]
+_CSTR = 'Driver={' + _LATEST_DRIVER + '};Server=%(server)s;Database=%(db)s;Authentication=ActiveDirectoryIntegrated;'
 
 
 _id = '_id'
@@ -434,14 +436,9 @@ def get_driver(driver = None):
     if driver is None or driver is True:
         driver = cfg_read().get('sql_driver')
     if driver is None:
-        odbc_drivers = [d for d in pyodbc.drivers() if d.startswith('ODBC')]
-        if len(odbc_drivers):
-            driver = sorted(odbc_drivers)[-1]
-        if driver is None:
-            raise ValueError('No ODBC drivers found for SQL Server, please save one: cfg = cfg_read(); cfg["sql_driver"] = "ODBC+Driver+17+for+SQL+Server"; cfg_write(cfg)')    
-        else:
-            driver = driver.replace(' ', '+')
-            return driver
+        driver = _LATEST_DRIVER
+        driver = driver.replace(' ', '+')
+        return driver
     elif is_int(driver):
         return 'ODBC+Driver+%i+for+SQL+Server'%driver
     else:
@@ -470,7 +467,6 @@ def _db(connection):
     return db
     
 
-_CSTR = 'Driver={ODBC Driver 17 for SQL Server};Server=%(server)s;Database=%(db)s;Authentication=ActiveDirectoryIntegrated;'
 
 def get_connection_info(*pairs, **connection):
     """
@@ -632,8 +628,8 @@ def get_engine(*pairs, **connection):
     """
     returns a sqlalchemy engine object
     accepts either 
-    *pairs: 'driver={ODBC Driver 17 for SQL Server}' or
-    **connection: keyword arguments that look like driver = 'ODBC Driver 17 for SQL Server'    
+    *pairs: 'driver={ODBC Driver 18 for SQL Server}' or
+    **connection: keyword arguments that look like driver = 'ODBC Driver 18 for SQL Server'    
     """
     return _get_engine(*pairs, **connection)
     

@@ -34,7 +34,13 @@ _SCHEMAS = {}
 _TABLES = {}
 _CHUNK = 100
 _MAX_WORKERS = 0
-_LATEST_DRIVER = sorted([d for d in pyodbc.drivers() if d.startswith('ODBC')])[-1]
+_ODBC_DRIVER = sorted([d for d in pyodbc.drivers() if d.startswith('ODBC')])
+if len(_ODBC_DRIVER):
+    _LATEST_DRIVER = _ODBC_DRIVER[-1]
+elif 'SQL Server' in pyodbc.drivers():
+    _LATEST_DRIVER = 'SQL Server' 
+else:
+    raise ValueError('Cannot fund a SQL Server or an ODBC driver')
 _CSTR = 'Driver={' + _LATEST_DRIVER + '};Server=%(server)s;Database=%(db)s;Authentication=ActiveDirectoryIntegrated;'
 
 
@@ -1995,7 +2001,7 @@ class sql_cursor(object):
         reader = self._reader(reader)
         res = item
         if is_str(res) and res.startswith('{') and load:
-            res = loads(res)
+            res = try_back(loads)(res)
         for r in as_list(reader):
             res = res[r] if is_strs(r) else r(res)
         return res
